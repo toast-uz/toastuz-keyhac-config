@@ -14,3 +14,6 @@ clipboard.json
 
 # Keyhac runtime data
 clipboard.json
+
+# Local backup config
+config_org.py
