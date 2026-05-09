@@ -1,4 +1,5 @@
 import platform
+import subprocess
 import time
 import traceback
 
@@ -76,7 +77,7 @@ NICOLA_TABLE = {
     "Q": ("。", "ぁ", "゜"), "W": ("か", "え", "が"), "E": ("た", "り", "だ"),
     "R": ("こ", "ゃ", "ご"), "T": ("さ", "れ", "ざ"), "Y": ("ら", "ぱ", "よ"),
     "U": ("ち", "ぢ", "に"), "I": ("く", "ぐ", "る"), "O": ("つ", "づ", "ま"),
-    "P": ("，", "ぴ", "ぇ"), "Atmark": ("゛", None, "゜"),
+    "P": ("，", "ぴ", "ぇ"), "Atmark": ("、", None, "、"),
     "OpenBracket": (None, None, None),
     # ホーム段
     "A": ("う", "を", "ヴ"), "S": ("し", "あ", "じ"),
@@ -151,20 +152,101 @@ except Exception:
     logger = _FallbackLogger()
 
 
+def detect_windows_key_profile():
+    manufacturer = ""
+    model = ""
+    is_vmware = False
+    detect_source = ""
+
+    # 1) fast path: platform.uname()
+    try:
+        u = platform.uname()
+        fast_text = " ".join(
+            [
+                getattr(u, "system", "") or "",
+                getattr(u, "node", "") or "",
+                getattr(u, "release", "") or "",
+                getattr(u, "version", "") or "",
+                getattr(u, "machine", "") or "",
+                getattr(u, "processor", "") or "",
+            ]
+        ).lower()
+        if "vmware" in fast_text:
+            is_vmware = True
+            detect_source = "platform.uname"
+    except Exception as e:
+        logger.info(f"NICOLA: windows-vmware-detect-uname-error={e}")
+
+    # 2) fallback: PowerShell CIM
+    if not is_vmware:
+        ps_cmd = [
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "(Get-CimInstance Win32_ComputerSystem | Select-Object -ExpandProperty Manufacturer);"
+            "(Get-CimInstance Win32_ComputerSystem | Select-Object -ExpandProperty Model)",
+        ]
+
+        last_error = None
+        for timeout_sec in (8, 15):
+            try:
+                r = subprocess.run(
+                    ps_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_sec,
+                )
+                out = (r.stdout or "").splitlines()
+                out = [line.strip() for line in out if line.strip()]
+                if len(out) >= 1:
+                    manufacturer = out[0]
+                if len(out) >= 2:
+                    model = out[1]
+                text = f"{manufacturer} {model}".lower()
+                is_vmware = "vmware" in text
+                detect_source = "powershell"
+                last_error = None
+                break
+            except Exception as e:
+                last_error = e
+
+        if last_error:
+            logger.info(f"NICOLA: windows-vmware-detect-error={last_error}")
+
+    profile = "windows-mac-key" if is_vmware else "windows-vk"
+    logger.info(
+        "NICOLA: windows-vmware-detect="
+        f"{is_vmware} source='{detect_source}' manufacturer='{manufacturer}' model='{model}'"
+    )
+    logger.info(f"NICOLA: key-profile={profile}")
+    return profile
+
+
 class NicolaEngine:
-    def __init__(self, keymap, keytable, os_name):
+    def __init__(self, keymap, keytable, os_name, key_profile=None):
         self.keymap = keymap
         self.keytable = keytable
         self.os_name = os_name
 
         if os_name == "windows":
-            self.left_thumb = WIN_MUHENKAN
-            self.right_thumb = WIN_HENKAN
+            if key_profile == "windows-mac-key":
+                # VMware Fusion on Windows: Mac由来キー
+                self.left_thumb = "(240)"
+                self.right_thumb = "(242)"
+            else:
+                self.left_thumb = WIN_MUHENKAN
+                self.right_thumb = WIN_HENKAN
             self.eisu_key = WIN_EISU
-            self.toggle_key = "Muhenkan"
-            self.convert_key = "Henkan"
-            self.kana_on_key = "Henkan"
-            self.eisu_on_key = "Eisu"
+            # keyhac 1.83 は Henkan/Muhenkan 文字列名を受け付けないため
+            # IME制御キー送出は VK 数値表記で統一する
+            self.toggle_key = "(29)"   # 無変換
+            self.convert_key = "(28)"  # 変換
+            self.kana_on_key = "(28)"  # かなON
+            self.eisu_on_key = "(25)"  # 英数
             self.toggle_keys = [self.toggle_key]
         else:
             self.left_thumb = MAC_LEFT_THUMB
@@ -191,31 +273,55 @@ class NicolaEngine:
         self.force_eisu_until = 0.0
         self.logical_eisu_mode = False
         self.last_eisu_oneshot_at = 0.0
+        self.input_key_profile = key_profile
 
         self._setup()
 
+    def _set_input_profile(self, profile):
+        if self.input_key_profile == profile:
+            return
+        self.input_key_profile = profile
+        logger.info(f"NICOLA: key-profile={profile}")
+
+    def _ensure_input_profile(self):
+        if self.input_key_profile is None:
+            self._set_input_profile("windows-vk" if self.os_name == "windows" else "mac")
+
     def _bind_windows_legacy(self):
-        # keyhac 1.83 向け: 無変換/変換を User modifier 化して U0/U1 同時打鍵で扱う
+        if self.input_key_profile == "windows-mac-key":
+            left_mod_vk = 240
+            right_mod_vk = 242
+        else:
+            left_mod_vk = 29
+            right_mod_vk = 28
+        logger.info(
+            "NICOLA: windows-thumb-keys "
+            f"left=({left_mod_vk}) right=({right_mod_vk}) profile={self.input_key_profile}"
+        )
+        left_mod_key = f"({left_mod_vk})"
+        right_mod_key = f"({right_mod_vk})"
+
         if hasattr(self.keymap, "defineModifier"):
-            self.keymap.defineModifier(self.left_thumb, "User0")
-            self.keymap.defineModifier(self.right_thumb, "User1")
+            # 指示どおり User2/User3 を使用
+            self.keymap.defineModifier(left_mod_vk, "User2")
+            self.keymap.defineModifier(right_mod_vk, "User3")
 
         def bind(expr, fn):
             self.keytable[expr] = fn
 
-        # 平打ち
+        # 平打ち（プロファイル固定はしない。親指イベントで確定させる）
         for key in NICOLA_MAIN_KEYS:
-            bind(key, (lambda k=key: self._emit_key(k, None)))
+            bind(key, (lambda k=key: self._act_plain(k)))
 
         # 同時打鍵（左/右）
         for key in NICOLA_MAIN_KEYS:
-            bind(f"U0-{key}", (lambda k=key: self._emit_key(k, 0)))
-            bind(f"U1-{key}", (lambda k=key: self._emit_key(k, 1)))
+            bind(f"U2-{key}", (lambda k=key: self._act_left(k)))
+            bind(f"U3-{key}", (lambda k=key: self._act_right(k)))
 
         # 単打
-        bind(f"O-{self.left_thumb}", lambda: self._thumb_stop(0))
-        bind(f"O-{self.right_thumb}", lambda: self._thumb_stop(1))
-        bind(f"O-{self.eisu_key}", self._eisu_oneshot)
+        bind(f"O-{left_mod_key}", lambda: self._act_left_oneshot())
+        bind(f"O-{right_mod_key}", lambda: self._act_right_oneshot())
+        bind(f"O-{self.eisu_key}", lambda: self._act_eisu_oneshot())
 
     def _send(self, *keys):
         # keyhac mac (snake_case) / keyhac windows (camelCase) 互換
@@ -244,6 +350,37 @@ class NicolaEngine:
                 cmd()
             except Exception:
                 logger.warning(f"NICOLA: cannot send key '{k}'")
+
+    # 共通アクション（入力経路差異を吸収）
+    def _act_plain(self, key):
+        self._ensure_input_profile()
+        logger.info(f"NICOLA[{self.input_key_profile}]: plain {key}")
+        self._emit_key(key, None)
+
+    def _act_left(self, key):
+        self._ensure_input_profile()
+        logger.info(f"NICOLA[{self.input_key_profile}]: left {key}")
+        self._emit_key(key, 0)
+
+    def _act_right(self, key):
+        self._ensure_input_profile()
+        logger.info(f"NICOLA[{self.input_key_profile}]: right {key}")
+        self._emit_key(key, 1)
+
+    def _act_left_oneshot(self):
+        self._ensure_input_profile()
+        logger.info(f"NICOLA[{self.input_key_profile}]: left oneshot")
+        self._thumb_stop(0)
+
+    def _act_right_oneshot(self):
+        self._ensure_input_profile()
+        logger.info(f"NICOLA[{self.input_key_profile}]: right oneshot")
+        self._thumb_stop(1)
+
+    def _act_eisu_oneshot(self):
+        self._ensure_input_profile()
+        logger.info(f"NICOLA[{self.input_key_profile}]: eisu oneshot")
+        self._eisu_oneshot()
 
     def _send_first(self, keys):
         for key in keys:
@@ -561,9 +698,16 @@ class NicolaEngine:
             "NICOLA: physical keys "
             f"left={self.left_thumb}, right={self.right_thumb}, eisu={self.eisu_key}"
         )
+        if self.os_name != "windows":
+            self._set_input_profile("mac")
 
-        # Windows keyhac 1.83 は U0/U1 方式の方が安定
-        if self.os_name == "windows" and hasattr(self.keymap, "defineWindowKeymap"):
+        # Windows keyhac 1.83 では通常環境は U2/U3 が安定。
+        # ただし VMware(mac-key) は modifier 化で誤判定しやすいため D/U 経路を使う。
+        if (
+            self.os_name == "windows"
+            and hasattr(self.keymap, "defineWindowKeymap")
+            and self.input_key_profile != "windows-mac-key"
+        ):
             self._bind_windows_legacy()
             return
 
@@ -601,6 +745,9 @@ def configure(keymap):
 
         os_name = platform.system().lower()
         logger.info(f"NICOLA: profile={os_name}")
+        key_profile = None
+        if os_name == "windows":
+            key_profile = detect_windows_key_profile()
 
         if hasattr(keymap, "define_keytable"):
             keytable_global = keymap.define_keytable(focus_path_pattern="*")
@@ -608,7 +755,7 @@ def configure(keymap):
             keytable_global = keymap.defineWindowKeymap()
         else:
             raise RuntimeError("Unsupported Keyhac API: cannot define keytable")
-        NicolaEngine(keymap, keytable_global, os_name)
+        NicolaEngine(keymap, keytable_global, os_name, key_profile=key_profile)
 
         logger.info("NICOLA: configure() completed")
     except Exception as e:
