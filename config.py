@@ -11,6 +11,8 @@ from keyhac import *
 
 # 同時打鍵判定幅（秒）
 SIMULT_WINDOW_SEC = 0.18
+# 左親指はやや広めに判定
+LEFT_SIMULT_WINDOW_SEC = 0.28
 # 左親指単打（英数キー兼用）の遅延確定幅（秒）
 LEFT_ONESHOT_DELAY_SEC = 0.25
 
@@ -32,7 +34,7 @@ MAC_TOGGLE_KEYS = ["Ctrl-J", "Kana"]
 NICOLA_MAIN_KEYS = [
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "Minus",
     "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P",
-    "OpenBracket", "CloseBracket",
+    "Atmark", "OpenBracket", "CloseBracket",
     "A", "S", "D", "F", "G", "H", "J", "K", "L", "Semicolon",
     "Quote",
     "Z", "X", "C", "V", "B", "N", "M", "Comma", "Period", "Slash", "BackSlash",
@@ -53,12 +55,13 @@ NICOLA_TABLE = {
     "0": ("0", "KEY:Shift-0", "KEY:Shift-CloseBracket"),
     "Minus": ("KEY:Minus", "KEY:Shift-Minus", "KEY:Shift-BackSlash"),
     # 右側記号キー
+    "Atmark": ("、", "KEY:Shift-Atmark", "KEY:Atmark"),
     "OpenBracket": ("、", "KEY:Shift-OpenBracket", "KEY:OpenBracket"),
     "CloseBracket": ("KEY:CloseBracket", "KEY:Shift-CloseBracket", "KEY:CloseBracket"),
     "Q": ("。", "ぁ", ""), "W": ("か", "え", "が"), "E": ("た", "り", "だ"),
     "R": ("こ", "ゃ", "ご"), "T": ("さ", "れ", "ざ"), "Y": ("ら", "ぱ", "よ"),
     "U": ("ち", "ぢ", "に"), "I": ("く", "ぐ", "る"), "O": ("つ", "づ", "ま"),
-    "P": (",", "ぴ", "ぇ"), "A": ("う", "を", "ゔ"), "S": ("し", "あ", "じ"),
+    "P": ("、", "ぴ", "ぇ"), "A": ("う", "を", "ゔ"), "S": ("し", "あ", "じ"),
     "D": ("て", "な", "で"), "F": ("け", "ゅ", "げ"), "G": ("せ", "も", "ぜ"),
     "H": ("は", "ば", "み"), "J": ("と", "ど", "お"), "K": ("き", "ぎ", "の"),
     "L": ("い", "ぽ", "ょ"), "Semicolon": ("ん", ";", "っ"), "Z": (".", "ぅ", "ゑ"),
@@ -137,6 +140,8 @@ class NicolaEngine:
         self.left_oneshot_pending = False
         self.left_oneshot_at = None
         self.ignore_next_left_thumb_oneshot = False
+        self.suppress_next_eisu_oneshot = False
+        self.suppress_next_right_thumb_oneshot = False
 
         self._setup()
 
@@ -188,6 +193,14 @@ class NicolaEngine:
     def _set_ime_eisu(self):
         self._send(self.eisu_on_key)
         self.ime = False
+
+    def _send_ascii_key(self, key_expr):
+        was_kana = self._is_kana_mode()
+        if was_kana:
+            self._set_ime_eisu()
+        self._send(key_expr)
+        if was_kana:
+            self._set_ime_kana()
 
     def _has_marked_text(self):
         # macOSのアクセシビリティ属性から未確定文字の有無を推定
@@ -256,6 +269,10 @@ class NicolaEngine:
         if not kana:
             return
 
+        if kana.startswith("KEY_ASCII:"):
+            self._send_ascii_key(kana[len("KEY_ASCII:"):])
+            return
+
         if kana.startswith("KEY:"):
             self._send(kana[4:])
             return
@@ -277,11 +294,16 @@ class NicolaEngine:
         self.suppress_oneshot[idx] = False
 
         # 直前文字が保留中なら同時打鍵として確定
-        if self.pending_key and self.pending_key_time and now - self.pending_key_time <= SIMULT_WINDOW_SEC:
+        simult_window = LEFT_SIMULT_WINDOW_SEC if idx == 0 else SIMULT_WINDOW_SEC
+        if self.pending_key and self.pending_key_time and now - self.pending_key_time <= simult_window:
             self._emit_key(self.pending_key, idx)
             self.pending_key = None
             self.pending_key_time = None
             self.suppress_oneshot[idx] = True
+            if idx == 0:
+                self.suppress_next_eisu_oneshot = True
+            elif idx == 1:
+                self.suppress_next_right_thumb_oneshot = True
             self.shift_time[idx] = None
             return
 
@@ -311,12 +333,18 @@ class NicolaEngine:
                 self.left_oneshot_pending = True
                 self.left_oneshot_at = time.time()
         else:
+            if self.suppress_next_right_thumb_oneshot:
+                self.suppress_next_right_thumb_oneshot = False
+                return
             # 右親指単独打鍵: かなモードへ
             if not self._is_kana_mode():
                 self._set_ime_kana()
 
     def _eisu_oneshot(self):
         self._apply_left_oneshot_if_due()
+        if self.suppress_next_eisu_oneshot:
+            self.suppress_next_eisu_oneshot = False
+            return
         # macでは英数キーが左親指キーと兼用のため、
         # この単打後に左親指単打処理が走らないよう抑止する。
         self.ignore_next_left_thumb_oneshot = True
@@ -335,9 +363,10 @@ class NicolaEngine:
             now = time.time()
 
             # 親指先押し -> 文字後押し の同時打鍵を優先判定
-            if self.shift_down[0] and self.shift_time[0] and now - self.shift_time[0] <= SIMULT_WINDOW_SEC:
+            if self.shift_down[0] and self.shift_time[0] and now - self.shift_time[0] <= LEFT_SIMULT_WINDOW_SEC:
                 self._emit_key(key, 0)
                 self.suppress_oneshot[0] = True
+                self.suppress_next_eisu_oneshot = True
                 self.left_oneshot_pending = False
                 self.left_oneshot_at = None
                 logger.info(f"NICOLA: emit left {key} (thumb-first)")
@@ -345,6 +374,7 @@ class NicolaEngine:
             if self.shift_down[1] and self.shift_time[1] and now - self.shift_time[1] <= SIMULT_WINDOW_SEC:
                 self._emit_key(key, 1)
                 self.suppress_oneshot[1] = True
+                self.suppress_next_right_thumb_oneshot = True
                 logger.info(f"NICOLA: emit right {key} (thumb-first)")
                 return
 
