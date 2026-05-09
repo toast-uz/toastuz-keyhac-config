@@ -8,3 +8,9 @@ __pycache__/
 # Editor temp
 *.swp
 *.swo
+
+# Keyhac runtime data
+clipboard.json
+
+# Keyhac runtime data
+clipboard.json
