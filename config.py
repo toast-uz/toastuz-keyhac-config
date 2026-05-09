@@ -1,5 +1,4 @@
 import platform
-import subprocess
 import time
 import traceback
 
@@ -30,6 +29,12 @@ LEFT_SIMULT_WINDOW_SEC = 0.28
 LEFT_ONESHOT_DELAY_SEC = 0.25
 # 英数切替直後にIME反映が遅れるアプリ向けの保護時間
 EISU_GUARD_SEC = 0.35
+# 実験: mac/windows 共通で JISかなキー送出を使う
+USE_UNIFIED_JIS_KANA = True
+# Windows 英数モード時の文字幅
+# "half": 半角英数 (VK_DBE_SBCSCHAR=243)
+# "full": 全角英数 (VK_DBE_DBCSCHAR=244)
+WINDOWS_EISU_WIDTH = "half"
 
 # IME モード（環境差があるため内部状態も併用）
 IME_MODE_EISU = 0
@@ -89,7 +94,7 @@ NICOLA_TABLE = {
     "Z": ("．", "ぅ", None),
     "X": ("ひ", "ー", "び"), "C": ("す", "ろ", "ず"), "V": ("ふ", "や", "ぶ"),
     "B": ("へ", "ぃ", "べ"), "N": ("め", "ぷ", "ぬ"), "M": ("そ", "ぞ", "ゆ"),
-    "Comma": ("ね", "ぺ", "む"), "Period": ("ほ", "ぼ", "わ"), "Slash": ("・", "ぉ", None),
+    "Comma": ("ね", "ぺ", "む"), "Period": ("ほ", "ぼ", "わ"), "Slash": ("・", None, "ぉ"),
     "CloseBracket": (None, None, None), "BackSlash": (None, None, None),
 }
 
@@ -124,6 +129,72 @@ ROMAJI_KEYNAME_MAP = {
 
 DIRECT_KEYSEQ_MAP = {}
 
+# JISかな入力用: かな1文字 -> 物理キー
+# 例: 「お」なら "6"
+JIS_KANA_KEY_MAP = {
+    "あ": "3", "い": "E", "う": "4", "え": "5", "お": "6",
+    "か": "T", "き": "G", "く": "H", "け": "Colon", "こ": "B",
+    "さ": "X", "し": "D", "す": "R", "せ": "P", "そ": "C",
+    "た": "Q", "ち": "A", "つ": "Z", "て": "W", "と": "S",
+    "な": "U", "に": "I", "ぬ": "1", "ね": "Comma", "の": "K",
+    "は": "F", "ひ": "V", "ふ": "2", "へ": "Caret", "ほ": "Minus",
+    "ま": "J", "み": "N", "む": "CloseBracket", "め": "Slash", "も": "M",
+    "や": "7", "ゆ": "8", "よ": "9",
+    "ら": "O", "り": "L", "る": "Period", "れ": "Semicolon", "ろ": "Underscore",
+    "わ": "0", "を": "Shift-0", "ん": "Y",
+    "ぁ": "Shift-3", "ぃ": "Shift-E", "ぅ": "Shift-4", "ぇ": "Shift-5", "ぉ": "Shift-6",
+    "ゃ": "Shift-7", "ゅ": "Shift-8", "ょ": "Shift-9", "っ": "Shift-Z",
+    "ー": "BackSlash",
+    "゛": "Atmark", "゜": "OpenBracket",
+    "，": "Shift-Comma", "．": "Shift-Period",
+    "、": "Shift-Comma", "。": "Shift-Period", "・": "Shift-Slash",
+}
+
+
+DAKUTEN_BASE_MAP = {
+    "が": "か", "ぎ": "き", "ぐ": "く", "げ": "け", "ご": "こ",
+    "ざ": "さ", "じ": "し", "ず": "す", "ぜ": "せ", "ぞ": "そ",
+    "だ": "た", "ぢ": "ち", "づ": "つ", "で": "て", "ど": "と",
+    "ば": "は", "び": "ひ", "ぶ": "ふ", "べ": "へ", "ぼ": "ほ",
+    "ゔ": "う", "ヴ": "う",
+}
+
+HANDAKUTEN_BASE_MAP = {
+    "ぱ": "は", "ぴ": "ひ", "ぷ": "ふ", "ぺ": "へ", "ぽ": "ほ",
+}
+
+# JISかな送出では扱いづらい文字は、英数キー送出（必要時のみ一時英数化）で処理
+NICOLA_ASCII_FALLBACK_MAP = {
+    "１": "1", "２": "2", "３": "3", "４": "4", "５": "5",
+    "６": "6", "７": "7", "８": "8", "９": "9", "０": "0",
+    "－": "Minus",
+}
+
+TOPROW_SYMBOL_ASCII_KEY_MAP = {
+    "？": "Shift-Slash",
+    "／": "Slash",
+    "～": "Shift-Caret",
+    "「": "Shift-OpenBracket",
+    "」": "Shift-CloseBracket",
+    "〔": "OpenBracket",
+    "〕": "CloseBracket",
+    "（": "Shift-8",
+    "）": "Shift-9",
+    "『": "Shift-Comma",
+    "』": "Shift-Period",
+}
+TOPROW_DIRECT_FULLWIDTH_SYMBOLS = set(TOPROW_SYMBOL_ASCII_KEY_MAP.keys())
+TOPROW_PLAIN_FULLWIDTH_TEXT_MAP = {
+    "1": "１", "2": "２", "3": "３", "4": "４", "5": "５",
+    "6": "６", "7": "７", "8": "８", "9": "９", "0": "０",
+    "Minus": "－",
+}
+TOPROW_SHIFT_FULLWIDTH_TEXT_MAP = {
+    "1": "！", "2": "／", "3": "～", "4": "「", "5": "」",
+    "6": "〔", "7": "〕", "8": "（", "9": "）", "0": "『",
+    "Minus": "』",
+}
+
 # mac で文字直送できない記号・全角数字をキー送信へ変換
 MAC_CHAR_KEY_MAP = {
     "１": "1", "２": "2", "３": "3", "４": "4", "５": "5",
@@ -152,80 +223,6 @@ except Exception:
     logger = _FallbackLogger()
 
 
-def detect_windows_key_profile():
-    manufacturer = ""
-    model = ""
-    is_vmware = False
-    detect_source = ""
-
-    # 1) fast path: platform.uname()
-    try:
-        u = platform.uname()
-        fast_text = " ".join(
-            [
-                getattr(u, "system", "") or "",
-                getattr(u, "node", "") or "",
-                getattr(u, "release", "") or "",
-                getattr(u, "version", "") or "",
-                getattr(u, "machine", "") or "",
-                getattr(u, "processor", "") or "",
-            ]
-        ).lower()
-        if "vmware" in fast_text:
-            is_vmware = True
-            detect_source = "platform.uname"
-    except Exception as e:
-        logger.info(f"NICOLA: windows-vmware-detect-uname-error={e}")
-
-    # 2) fallback: PowerShell CIM
-    if not is_vmware:
-        ps_cmd = [
-            "powershell.exe",
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            "(Get-CimInstance Win32_ComputerSystem | Select-Object -ExpandProperty Manufacturer);"
-            "(Get-CimInstance Win32_ComputerSystem | Select-Object -ExpandProperty Model)",
-        ]
-
-        last_error = None
-        for timeout_sec in (8, 15):
-            try:
-                r = subprocess.run(
-                    ps_cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_sec,
-                )
-                out = (r.stdout or "").splitlines()
-                out = [line.strip() for line in out if line.strip()]
-                if len(out) >= 1:
-                    manufacturer = out[0]
-                if len(out) >= 2:
-                    model = out[1]
-                text = f"{manufacturer} {model}".lower()
-                is_vmware = "vmware" in text
-                detect_source = "powershell"
-                last_error = None
-                break
-            except Exception as e:
-                last_error = e
-
-        if last_error:
-            logger.info(f"NICOLA: windows-vmware-detect-error={last_error}")
-
-    profile = "windows-mac-key" if is_vmware else "windows-vk"
-    logger.info(
-        "NICOLA: windows-vmware-detect="
-        f"{is_vmware} source='{detect_source}' manufacturer='{manufacturer}' model='{model}'"
-    )
-    logger.info(f"NICOLA: key-profile={profile}")
-    return profile
-
-
 class NicolaEngine:
     def __init__(self, keymap, keytable, os_name, key_profile=None):
         self.keymap = keymap
@@ -233,20 +230,23 @@ class NicolaEngine:
         self.os_name = os_name
 
         if os_name == "windows":
-            if key_profile == "windows-mac-key":
-                # VMware Fusion on Windows: Mac由来キー
-                self.left_thumb = "(240)"
-                self.right_thumb = "(242)"
-            else:
-                self.left_thumb = WIN_MUHENKAN
-                self.right_thumb = WIN_HENKAN
+            self.left_thumb = WIN_MUHENKAN
+            self.right_thumb = WIN_HENKAN
             self.eisu_key = WIN_EISU
             # keyhac 1.83 は Henkan/Muhenkan 文字列名を受け付けないため
             # IME制御キー送出は VK 数値表記で統一する
             self.toggle_key = "(29)"   # 無変換
             self.convert_key = "(28)"  # 変換
-            self.kana_on_key = "(28)"  # かなON
+            # かなON は「モード固定」系のみ使用する。
+            # - VK_IME_ON(22)
+            # - VK_KANA(21)
+            # Convert/NonConvert をかなON用途に使うと
+            # IME設定次第でローマ字/かなトグルに巻き込まれやすい。
+            self.kana_on_key = "(22)"  # IME ON
+            self.kana_on_keys = ["(22)", "(21)"]  # かなONのフォールバック列
             self.eisu_on_key = "(25)"  # 英数
+            self.eisu_width_half_key = "(243)"
+            self.eisu_width_full_key = "(244)"
             self.toggle_keys = [self.toggle_key]
         else:
             self.left_thumb = MAC_LEFT_THUMB
@@ -255,7 +255,10 @@ class NicolaEngine:
             self.toggle_key = "Kana"
             self.convert_key = MAC_RIGHT_THUMB_SINGLE_CONVERT_KEY
             self.kana_on_key = "Kana"
+            self.kana_on_keys = [self.kana_on_key]
             self.eisu_on_key = "Eisu"
+            self.eisu_width_half_key = None
+            self.eisu_width_full_key = None
             self.toggle_keys = MAC_TOGGLE_KEYS
 
         self.ime = False
@@ -274,6 +277,9 @@ class NicolaEngine:
         self.logical_eisu_mode = False
         self.last_eisu_oneshot_at = 0.0
         self.input_key_profile = key_profile
+        self._is_teams_target = False
+        self._teams_target_identity = ""
+        self._webview2_mode = False
 
         self._setup()
 
@@ -288,12 +294,8 @@ class NicolaEngine:
             self._set_input_profile("windows-vk" if self.os_name == "windows" else "mac")
 
     def _bind_windows_legacy(self):
-        if self.input_key_profile == "windows-mac-key":
-            left_mod_vk = 240
-            right_mod_vk = 242
-        else:
-            left_mod_vk = 29
-            right_mod_vk = 28
+        left_mod_vk = 29
+        right_mod_vk = 28
         logger.info(
             "NICOLA: windows-thumb-keys "
             f"left=({left_mod_vk}) right=({right_mod_vk}) profile={self.input_key_profile}"
@@ -323,6 +325,8 @@ class NicolaEngine:
         bind(f"O-{right_mod_key}", lambda: self._act_right_oneshot())
         bind(f"O-{self.eisu_key}", lambda: self._act_eisu_oneshot())
 
+        self._bind_toprow_fullwidth(bind)
+
     def _send(self, *keys):
         # keyhac mac (snake_case) / keyhac windows (camelCase) 互換
         if hasattr(self.keymap, "get_input_context"):
@@ -351,18 +355,90 @@ class NicolaEngine:
             except Exception:
                 logger.warning(f"NICOLA: cannot send key '{k}'")
 
+    def _detect_teams_target(self):
+        """
+        編集対象が Teams かをベストエフォートで判定する。
+        挙動は変えず、判定結果はログ用途のみ。
+        """
+        fields = []
+        wnd = None
+        try:
+            if hasattr(self.keymap, "getWindow"):
+                wnd = self.keymap.getWindow()
+            elif hasattr(self.keymap, "get_window"):
+                wnd = self.keymap.get_window()
+        except Exception:
+            wnd = None
+
+        if wnd:
+            for name in (
+                "getProcessName",
+                "get_process_name",
+                "getClassName",
+                "get_class_name",
+                "getText",
+                "get_text",
+            ):
+                try:
+                    if hasattr(wnd, name):
+                        v = getattr(wnd, name)()
+                        if v:
+                            fields.append(str(v))
+                except Exception:
+                    pass
+
+        try:
+            focus = getattr(self.keymap, "focus", None)
+            if focus:
+                for attr_name in ("AXTitle", "AXRoleDescription"):
+                    try:
+                        if hasattr(focus, "get_attribute_value"):
+                            v = focus.get_attribute_value(attr_name)
+                            if v:
+                                fields.append(str(v))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        joined = " | ".join(fields)
+        hay = joined.lower()
+        is_teams = (
+            ("teams" in hay)
+            or ("msteams" in hay)
+            or ("ms-teams" in hay)
+            or ("teams2" in hay)
+        )
+        return is_teams, joined
+
+    def _refresh_teams_target_state(self):
+        is_teams, identity = self._detect_teams_target()
+        ident_l = identity.lower()
+        webview2_mode = ("msedgewebview2.exe" in ident_l)
+        if (is_teams != self._is_teams_target) or (identity != self._teams_target_identity):
+            self._is_teams_target = is_teams
+            self._teams_target_identity = identity
+            self._webview2_mode = webview2_mode
+            logger.info(f"NICOLA: webview2-mode={'enable' if self._webview2_mode else 'disable'}")
+        else:
+            # 状態不変でもモード値は更新しておく（将来の分岐用）
+            self._webview2_mode = webview2_mode
+
     # 共通アクション（入力経路差異を吸収）
     def _act_plain(self, key):
+        self._refresh_teams_target_state()
         self._ensure_input_profile()
         logger.info(f"NICOLA[{self.input_key_profile}]: plain {key}")
         self._emit_key(key, None)
 
     def _act_left(self, key):
+        self._refresh_teams_target_state()
         self._ensure_input_profile()
         logger.info(f"NICOLA[{self.input_key_profile}]: left {key}")
         self._emit_key(key, 0)
 
     def _act_right(self, key):
+        self._refresh_teams_target_state()
         self._ensure_input_profile()
         logger.info(f"NICOLA[{self.input_key_profile}]: right {key}")
         self._emit_key(key, 1)
@@ -381,6 +457,28 @@ class NicolaEngine:
         self._ensure_input_profile()
         logger.info(f"NICOLA[{self.input_key_profile}]: eisu oneshot")
         self._eisu_oneshot()
+
+    def _act_toprow_plain(self, ch):
+        self._ensure_input_profile()
+        self._send_toprow_fullwidth(ch)
+
+    def _act_toprow_shift(self, ch):
+        self._ensure_input_profile()
+        self._send_toprow_fullwidth(ch)
+
+    def _act_toprow_shift_with_key(self, key_name, ch):
+        self._ensure_input_profile()
+        if self._send_text(ch, prefer_key_on_mac=False):
+            return
+        # 文字直送できない環境では、通常の Shift+上段キーを送る
+        self._send_ascii_key_fullwidth(f"Shift-{key_name}")
+
+    def _bind_toprow_fullwidth(self, bind):
+        # 上段: 単独打鍵/通常Shift打鍵を全角送出で補強（mac/windows共通）
+        for k, ch in TOPROW_PLAIN_FULLWIDTH_TEXT_MAP.items():
+            bind(k, (lambda c=ch: self._act_toprow_plain(c)))
+        for k, ch in TOPROW_SHIFT_FULLWIDTH_TEXT_MAP.items():
+            bind(f"Shift-{k}", (lambda key=k, c=ch: self._act_toprow_shift_with_key(key, c)))
 
     def _send_first(self, keys):
         for key in keys:
@@ -419,21 +517,87 @@ class NicolaEngine:
         for c in seq:
             self._send(ROMAJI_KEYNAME_MAP.get(c, c.upper()))
 
-    def _send_text(self, text):
-        # mac: まずキー送信に変換を試す（clipboard禁止のため）
-        if self.os_name != "windows":
+    def _send_jis_kana(self, kana):
+        if kana in TOPROW_DIRECT_FULLWIDTH_SYMBOLS:
+            if self._send_text(kana, prefer_key_on_mac=False):
+                return True
+            top_sym_fb = TOPROW_SYMBOL_ASCII_KEY_MAP.get(kana)
+            if top_sym_fb:
+                logger.info(f"NICOLA: direct text failed for '{kana}', fallback key={top_sym_fb}")
+                self._send_ascii_key_fullwidth(top_sym_fb)
+                return True
+            return False
+
+        top_sym = TOPROW_SYMBOL_ASCII_KEY_MAP.get(kana)
+        if top_sym:
+            self._send_ascii_key_fullwidth(top_sym)
+            return True
+
+        ascii_key = NICOLA_ASCII_FALLBACK_MAP.get(kana)
+        if ascii_key:
+            self._send_ascii_key(ascii_key)
+            return True
+
+        if kana == "ー":
+            # JISかな入力で長音「ー」は ¥(Yen) キー
+            self._send("Yen")
+            return True
+
+        key_expr = JIS_KANA_KEY_MAP.get(kana)
+        if key_expr:
+            self._send(key_expr)
+            return True
+
+        base = DAKUTEN_BASE_MAP.get(kana)
+        if base:
+            base_key = JIS_KANA_KEY_MAP.get(base)
+            if base_key:
+                self._send(base_key)
+                self._send(JIS_KANA_KEY_MAP["゛"])
+                return True
+
+        base = HANDAKUTEN_BASE_MAP.get(kana)
+        if base:
+            base_key = JIS_KANA_KEY_MAP.get(base)
+            if base_key:
+                self._send(base_key)
+                self._send(JIS_KANA_KEY_MAP["゜"])
+                return True
+
+        return False
+
+    def _send_toprow_fullwidth(self, ch):
+        if self._send_text(ch, prefer_key_on_mac=False):
+            return
+        key_expr = TOPROW_SYMBOL_ASCII_KEY_MAP.get(ch)
+        if key_expr:
+            self._send_ascii_key_fullwidth(key_expr)
+
+    def _send_text(self, text, prefer_key_on_mac=True):
+        # mac: 必要時のみキー送信に変換を試す（clipboard禁止のため）
+        if self.os_name != "windows" and prefer_key_on_mac:
             key_expr = MAC_CHAR_KEY_MAP.get(text)
             if key_expr:
                 self._send(key_expr)
-                return
+                return True
 
         last_error = None
+
+        # keyhac mac: input context の send_text が使える場合は最優先
+        try:
+            if hasattr(self.keymap, "get_input_context"):
+                with self.keymap.get_input_context() as input_ctx:
+                    if hasattr(input_ctx, "send_text"):
+                        input_ctx.send_text(text)
+                        return True
+        except Exception as e:
+            last_error = e
 
         # Windows keyhac 1.x
         try:
             if hasattr(self.keymap, "InputTextCommand"):
                 self.keymap.InputTextCommand(text)()
-                return
+                return True
         except Exception as e:
             last_error = e
 
@@ -450,21 +614,36 @@ class NicolaEngine:
                     self.keymap.fixFunnyModifierState()
                 elif hasattr(self.keymap, "_fixFunnyModifierState"):
                     self.keymap._fixFunnyModifierState()
-                return
+                return True
         except Exception as e:
             last_error = e
 
         if pyauto is None:
             logger.info("NICOLA: text send failed because pyauto is unavailable")
         logger.info(f"NICOLA: text send failed '{text}' err={last_error}")
+        return False
 
     def _set_ime_kana(self):
-        self._send(self.kana_on_key)
+        if self.os_name == "windows":
+            ok = self._send_first(self.kana_on_keys)
+            logger.info(
+                "NICOLA: set_ime_kana windows "
+                f"result={ok} keys={self.kana_on_keys}"
+            )
+        else:
+            self._send(self.kana_on_key)
         self.ime = True
         self.logical_eisu_mode = False
 
     def _set_ime_eisu(self):
         self._send(self.eisu_on_key)
+        if self.os_name == "windows":
+            if WINDOWS_EISU_WIDTH == "full":
+                if self.eisu_width_full_key:
+                    self._send(self.eisu_width_full_key)
+            else:
+                if self.eisu_width_half_key:
+                    self._send(self.eisu_width_half_key)
         self.ime = False
         self.force_eisu_until = time.time() + EISU_GUARD_SEC
         self.logical_eisu_mode = True
@@ -477,8 +656,22 @@ class NicolaEngine:
         if was_kana:
             self._set_ime_kana()
 
+    def _send_ascii_key_fullwidth(self, key_expr):
+        was_kana = self._is_kana_mode()
+        if was_kana:
+            self._set_ime_eisu()
+        if self.os_name == "windows" and self.eisu_width_full_key:
+            self._send(self.eisu_width_full_key)
+        self._send(key_expr)
+        if was_kana:
+            self._set_ime_kana()
+
     def _has_marked_text(self):
-        # macOSのアクセシビリティ属性から未確定文字の有無を推定
+        # 未確定文字(候補)の有無を推定
+        # macOS: AXMarkedText
+        # Windows: keyhac 1.83 では明確な候補APIがないため False 扱い
+        if self.os_name == "windows":
+            return False
         try:
             elm = getattr(self.keymap, "focus", None)
             if not elm:
@@ -564,6 +757,9 @@ class NicolaEngine:
 
         if not is_kana:
             self._set_ime_kana()
+        if USE_UNIFIED_JIS_KANA:
+            if self._send_jis_kana(kana):
+                return
         self._send_romaji(kana)
 
     def _apply_pending_plain(self):
@@ -615,21 +811,36 @@ class NicolaEngine:
                 self.left_oneshot_pending = False
                 self.left_oneshot_at = None
                 return
-            # 英数モード -> かなモード は即時反応
-            # （遅延確定だと次キーイベント待ちになって切替不能に見えるため）
-            if not self._is_kana_mode():
-                self._set_ime_kana()
+            # 無変換:
+            # - 英数時: かなモードへ遷移
+            # - かな時: かなトグル
+            if self.os_name == "windows":
+                if self._is_kana_mode():
+                    self._send_first(self.toggle_keys)
+                else:
+                    self._set_ime_kana()
             else:
-                # かなモード中のトグルだけ遅延確定
-                self.left_oneshot_pending = True
-                self.left_oneshot_at = time.time()
+                # 英数モード -> かなモード は即時反応
+                # （遅延確定だと次キーイベント待ちになって切替不能に見えるため）
+                if not self._is_kana_mode():
+                    self._set_ime_kana()
+                else:
+                    # かなモード中のトグルだけ遅延確定
+                    self.left_oneshot_pending = True
+                    self.left_oneshot_at = time.time()
         else:
             if self.suppress_next_right_thumb_oneshot:
                 self.suppress_next_right_thumb_oneshot = False
                 return
-            # 右親指単独打鍵: かなモードへ
-            if not self._is_kana_mode():
-                self._set_ime_kana()
+            # 変換:
+            # - Windows は入力モードを不用意に触らず、変換キーのみ送出
+            if self.os_name == "windows":
+                if self.convert_key:
+                    self._send(self.convert_key)
+            else:
+                # 右親指単独打鍵: かなモードへ
+                if not self._is_kana_mode():
+                    self._set_ime_kana()
 
     def _eisu_oneshot(self):
         self._apply_left_oneshot_if_due()
@@ -646,11 +857,7 @@ class NicolaEngine:
         self.ignore_next_left_thumb_oneshot = True
         self.left_oneshot_pending = False
         self.left_oneshot_at = None
-        # macではトグル運用をしないため、英数キー単打は常に英数モードへ。
-        # windows側のみ、未確定文字がある場合はトグル分岐を許可する。
-        if self.os_name == "windows" and self._has_marked_text():
-            self._send_first(self.toggle_keys)
-            return
+        # 英数は常に英数モードへ
         self._set_ime_eisu()
 
     def _key_down(self, key):
@@ -694,22 +901,26 @@ class NicolaEngine:
         return _f
 
     def _setup(self):
+        logger.info(f"NICOLA: unified-jis-kana-send={USE_UNIFIED_JIS_KANA}")
         logger.info(
             "NICOLA: physical keys "
             f"left={self.left_thumb}, right={self.right_thumb}, eisu={self.eisu_key}"
         )
+        if self.os_name == "windows":
+            logger.info("NICOLA: windows-candidate-detect=limited(false-by-default)")
+        self._refresh_teams_target_state()
         if self.os_name != "windows":
             self._set_input_profile("mac")
 
-        # Windows keyhac 1.83 では通常環境は U2/U3 が安定。
-        # ただし VMware(mac-key) は modifier 化で誤判定しやすいため D/U 経路を使う。
-        if (
-            self.os_name == "windows"
-            and hasattr(self.keymap, "defineWindowKeymap")
-            and self.input_key_profile != "windows-mac-key"
-        ):
+        # Windows keyhac 1.83 は U2/U3 方式を使用
+        if self.os_name == "windows" and hasattr(self.keymap, "defineWindowKeymap"):
             self._bind_windows_legacy()
             return
+
+        # non-legacy（主に mac）でも上段の単独/Shiftを同じ全角ルートへ
+        def bind(expr, fn):
+            self.keytable[expr] = fn
+        self._bind_toprow_fullwidth(bind)
 
         self.keytable[f"D-{self.left_thumb}"] = lambda: self._thumb_start(0)
         self.keytable[f"U-{self.left_thumb}"] = lambda: self._thumb_stop(0)
@@ -747,7 +958,8 @@ def configure(keymap):
         logger.info(f"NICOLA: profile={os_name}")
         key_profile = None
         if os_name == "windows":
-            key_profile = detect_windows_key_profile()
+            key_profile = "windows-vk"
+            logger.info("NICOLA: windows-key-profile=fixed(windows-vk)")
 
         if hasattr(keymap, "define_keytable"):
             keytable_global = keymap.define_keytable(focus_path_pattern="*")
