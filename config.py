@@ -3,6 +3,18 @@ import time
 import traceback
 
 from keyhac import *
+try:
+    import pyauto
+except Exception:
+    pyauto = None
+
+
+class _FallbackLogger:
+    def _log(self, level, msg):
+        print(f"{level}: {msg}")
+    def info(self, msg): self._log("INFO", msg)
+    def warning(self, msg): self._log("WARNING", msg)
+    def error(self, msg): self._log("ERROR", msg)
 
 
 # =====================================================
@@ -15,15 +27,21 @@ SIMULT_WINDOW_SEC = 0.18
 LEFT_SIMULT_WINDOW_SEC = 0.28
 # 左親指単打（英数キー兼用）の遅延確定幅（秒）
 LEFT_ONESHOT_DELAY_SEC = 0.25
+# 英数切替直後にIME反映が遅れるアプリ向けの保護時間
+EISU_GUARD_SEC = 0.35
 
 # IME モード（環境差があるため内部状態も併用）
 IME_MODE_EISU = 0
 IME_MODE_KANA = 1
 
 # 物理キー名（OSにより切替）
-WIN_MUHENKAN = "Muhenkan"
-WIN_HENKAN = "Henkan"
-WIN_EISU = "Eisu"
+# keyhac 1.x(Windows) では日本語キー名が異なるため VKコード表記を使う
+# - 変換: VK_CONVERT(28)
+# - 無変換: VK_NONCONVERT(29)
+# - 英数相当: VK_KANJI(25) を利用（環境により未搭載の場合あり）
+WIN_MUHENKAN = "(29)"
+WIN_HENKAN = "(28)"
+WIN_EISU = "(25)"
 MAC_LEFT_THUMB = "Eisu"
 MAC_RIGHT_THUMB = "Kana"
 MAC_EISU = "Eisu"
@@ -42,34 +60,36 @@ NICOLA_MAIN_KEYS = [
 
 # NICOLA かな 3面テーブル（無/左/右）
 NICOLA_TABLE = {
-    # 数字段（NeoCat例準拠）
-    "1": ("1", "KEY:Shift-Slash", "KEY:Shift-1"),
-    "2": ("2", "KEY:Slash", "KEY:Shift-2"),
-    "3": ("3", "KEY:Shift-Plus", "KEY:Shift-3"),
-    "4": ("4", "KEY:CloseBracket", "KEY:Shift-4"),
-    "5": ("5", "KEY:BackSlash", "KEY:Shift-5"),
-    "6": ("6", "KEY:Shift-6", "KEY:Alt-CloseBracket"),
-    "7": ("7", "KEY:Shift-7", "KEY:Alt-BackSlash"),
-    "8": ("8", "KEY:Shift-8", "KEY:Shift-Comma"),
-    "9": ("9", "KEY:Shift-9", "KEY:Shift-Period"),
-    "0": ("0", "KEY:Shift-0", "KEY:Shift-CloseBracket"),
-    "Minus": ("KEY:Minus", "KEY:Shift-Minus", "KEY:Shift-BackSlash"),
-    # 右側記号キー
-    "Atmark": ("、", "KEY:Shift-Atmark", "KEY:Atmark"),
-    "OpenBracket": ("、", "KEY:Shift-OpenBracket", "KEY:OpenBracket"),
-    "CloseBracket": ("KEY:CloseBracket", "KEY:Shift-CloseBracket", "KEY:CloseBracket"),
-    "Q": ("。", "ぁ", ""), "W": ("か", "え", "が"), "E": ("た", "り", "だ"),
+    # 数字段（NICOLA J型）
+    "1": ("１", "？", "？"),
+    "2": ("２", "／", "／"),
+    "3": ("３", "～", "～"),
+    "4": ("４", "「", "「"),
+    "5": ("５", "」", "」"),
+    "6": ("６", "〔", "〔"),
+    "7": ("７", "〕", "〕"),
+    "8": ("８", "（", "（"),
+    "9": ("９", "）", "）"),
+    "0": ("０", "『", "『"),
+    "Minus": ("－", "』", "』"),
+    # 上段
+    "Q": ("。", "ぁ", "゜"), "W": ("か", "え", "が"), "E": ("た", "り", "だ"),
     "R": ("こ", "ゃ", "ご"), "T": ("さ", "れ", "ざ"), "Y": ("ら", "ぱ", "よ"),
     "U": ("ち", "ぢ", "に"), "I": ("く", "ぐ", "る"), "O": ("つ", "づ", "ま"),
-    "P": ("、", "ぴ", "ぇ"), "A": ("う", "を", "ゔ"), "S": ("し", "あ", "じ"),
+    "P": ("，", "ぴ", "ぇ"), "Atmark": ("゛", None, "゜"),
+    "OpenBracket": (None, None, None),
+    # ホーム段
+    "A": ("う", "を", "ヴ"), "S": ("し", "あ", "じ"),
     "D": ("て", "な", "で"), "F": ("け", "ゅ", "げ"), "G": ("せ", "も", "ぜ"),
     "H": ("は", "ば", "み"), "J": ("と", "ど", "お"), "K": ("き", "ぎ", "の"),
-    "L": ("い", "ぽ", "ょ"), "Semicolon": ("ん", ";", "っ"), "Z": (".", "ぅ", "ゑ"),
-    "Quote": ("KEY:Quote", "KEY:Shift-Quote", "KEY:Quote"),
+    "L": ("い", "ぽ", "ょ"), "Semicolon": ("ん", None, "っ"),
+    "Quote": ("、", None, None),
+    # 下段
+    "Z": ("．", "ぅ", None),
     "X": ("ひ", "ー", "び"), "C": ("す", "ろ", "ず"), "V": ("ふ", "や", "ぶ"),
     "B": ("へ", "ぃ", "べ"), "N": ("め", "ぷ", "ぬ"), "M": ("そ", "ぞ", "ゆ"),
-    "Comma": ("ね", "ぺ", "む"), "Period": ("ほ", "ぼ", "わ"), "Slash": ("・", "゛", "ぉ"),
-    "BackSlash": ("KEY:BackSlash", "KEY:Shift-BackSlash", "KEY:BackSlash"),
+    "Comma": ("ね", "ぺ", "む"), "Period": ("ほ", "ぼ", "わ"), "Slash": ("・", "ぉ", None),
+    "CloseBracket": (None, None, None), "BackSlash": (None, None, None),
 }
 
 # かな -> ローマ字（IMEローマ字入力向け）
@@ -103,7 +123,32 @@ ROMAJI_KEYNAME_MAP = {
 
 DIRECT_KEYSEQ_MAP = {}
 
-logger = getLogger("Config")
+# mac で文字直送できない記号・全角数字をキー送信へ変換
+MAC_CHAR_KEY_MAP = {
+    "１": "1", "２": "2", "３": "3", "４": "4", "５": "5",
+    "６": "6", "７": "7", "８": "8", "９": "9", "０": "0",
+    "－": "Minus",
+    "？": "Shift-Slash",
+    "／": "Slash",
+    "～": "Shift-Caret",
+    "「": "Shift-OpenBracket",
+    "」": "Shift-CloseBracket",
+    "〔": "OpenBracket",
+    "〕": "CloseBracket",
+    "（": "Shift-8",
+    "）": "Shift-9",
+    "『": "Shift-Comma",
+    "』": "Shift-Period",
+    "，": "Comma",
+    "．": "Period",
+    "゛": "Atmark",
+    "゜": "Shift-Atmark",
+}
+
+try:
+    logger = getLogger("Config")
+except Exception:
+    logger = _FallbackLogger()
 
 
 class NicolaEngine:
@@ -141,14 +186,64 @@ class NicolaEngine:
         self.left_oneshot_at = None
         self.ignore_next_left_thumb_oneshot = False
         self.suppress_next_eisu_oneshot = False
+        self.suppress_next_eisu_oneshot_until = 0.0
         self.suppress_next_right_thumb_oneshot = False
+        self.force_eisu_until = 0.0
+        self.logical_eisu_mode = False
+        self.last_eisu_oneshot_at = 0.0
 
         self._setup()
 
+    def _bind_windows_legacy(self):
+        # keyhac 1.83 向け: 無変換/変換を User modifier 化して U0/U1 同時打鍵で扱う
+        if hasattr(self.keymap, "defineModifier"):
+            self.keymap.defineModifier(self.left_thumb, "User0")
+            self.keymap.defineModifier(self.right_thumb, "User1")
+
+        def bind(expr, fn):
+            self.keytable[expr] = fn
+
+        # 平打ち
+        for key in NICOLA_MAIN_KEYS:
+            bind(key, (lambda k=key: self._emit_key(k, None)))
+
+        # 同時打鍵（左/右）
+        for key in NICOLA_MAIN_KEYS:
+            bind(f"U0-{key}", (lambda k=key: self._emit_key(k, 0)))
+            bind(f"U1-{key}", (lambda k=key: self._emit_key(k, 1)))
+
+        # 単打
+        bind(f"O-{self.left_thumb}", lambda: self._thumb_stop(0))
+        bind(f"O-{self.right_thumb}", lambda: self._thumb_stop(1))
+        bind(f"O-{self.eisu_key}", self._eisu_oneshot)
+
     def _send(self, *keys):
-        with self.keymap.get_input_context() as input_ctx:
+        # keyhac mac (snake_case) / keyhac windows (camelCase) 互換
+        if hasattr(self.keymap, "get_input_context"):
+            with self.keymap.get_input_context() as input_ctx:
+                for k in keys:
+                    input_ctx.send_key(k)
+            return
+
+        # keyhac 1.x (Windows)
+        if hasattr(self.keymap, "beginInput"):
+            self.keymap.beginInput()
             for k in keys:
-                input_ctx.send_key(k)
+                self.keymap.setInput_FromString(str(k))
+            self.keymap.endInput()
+            if hasattr(self.keymap, "fixFunnyModifierState"):
+                self.keymap.fixFunnyModifierState()
+            elif hasattr(self.keymap, "_fixFunnyModifierState"):
+                self.keymap._fixFunnyModifierState()
+            return
+
+        # Last resort
+        for k in keys:
+            try:
+                cmd = self.keymap.InputKeyCommand(str(k))
+                cmd()
+            except Exception:
+                logger.warning(f"NICOLA: cannot send key '{k}'")
 
     def _send_first(self, keys):
         for key in keys:
@@ -180,19 +275,62 @@ class NicolaEngine:
 
         seq = ROMAJI_MAP.get(kana)
         if not seq:
-            logger.info(f"NICOLA: romaji map missing for '{kana}'")
+            # 記号・全角数字などは直接テキスト送出
+            self._send_text(kana)
             return
 
         for c in seq:
             self._send(ROMAJI_KEYNAME_MAP.get(c, c.upper()))
 
+    def _send_text(self, text):
+        # mac: まずキー送信に変換を試す（clipboard禁止のため）
+        if self.os_name != "windows":
+            key_expr = MAC_CHAR_KEY_MAP.get(text)
+            if key_expr:
+                self._send(key_expr)
+                return
+
+        last_error = None
+
+        # Windows keyhac 1.x
+        try:
+            if hasattr(self.keymap, "InputTextCommand"):
+                self.keymap.InputTextCommand(text)()
+                return
+        except Exception as e:
+            last_error = e
+
+        # Fallback: beginInput + pyauto.Char (clipboardは使わない)
+        try:
+            if pyauto is not None and hasattr(self.keymap, "beginInput") and hasattr(self.keymap, "endInput"):
+                self.keymap.beginInput()
+                if hasattr(self.keymap, "setInput_Modifier"):
+                    self.keymap.setInput_Modifier(0)
+                for ch in text:
+                    self.keymap.input_seq.append(pyauto.Char(ch))
+                self.keymap.endInput()
+                if hasattr(self.keymap, "fixFunnyModifierState"):
+                    self.keymap.fixFunnyModifierState()
+                elif hasattr(self.keymap, "_fixFunnyModifierState"):
+                    self.keymap._fixFunnyModifierState()
+                return
+        except Exception as e:
+            last_error = e
+
+        if pyauto is None:
+            logger.info("NICOLA: text send failed because pyauto is unavailable")
+        logger.info(f"NICOLA: text send failed '{text}' err={last_error}")
+
     def _set_ime_kana(self):
         self._send(self.kana_on_key)
         self.ime = True
+        self.logical_eisu_mode = False
 
     def _set_ime_eisu(self):
         self._send(self.eisu_on_key)
         self.ime = False
+        self.force_eisu_until = time.time() + EISU_GUARD_SEC
+        self.logical_eisu_mode = True
 
     def _send_ascii_key(self, key_expr):
         was_kana = self._is_kana_mode()
@@ -205,7 +343,7 @@ class NicolaEngine:
     def _has_marked_text(self):
         # macOSのアクセシビリティ属性から未確定文字の有無を推定
         try:
-            elm = self.keymap.focus
+            elm = getattr(self.keymap, "focus", None)
             if not elm:
                 return False
             names = elm.get_attribute_names()
@@ -220,8 +358,12 @@ class NicolaEngine:
         # 取得できる場合は実IME状態を優先。
         # ただし値域が環境差で不定な場合は内部状態にフォールバックする。
         try:
-            wnd = self.keymap.getWindow()
-            if wnd:
+            wnd = None
+            if hasattr(self.keymap, "getWindow"):
+                wnd = self.keymap.getWindow()
+            elif hasattr(self.keymap, "get_window"):
+                wnd = self.keymap.get_window()
+            if wnd and hasattr(wnd, "getImeStatus"):
                 status = wnd.getImeStatus()
                 if status == IME_MODE_EISU:
                     return False
@@ -250,13 +392,19 @@ class NicolaEngine:
         self.left_oneshot_at = None
 
     def _emit_key(self, key, side):
+        is_kana = self._is_kana_mode()
+        if time.time() <= self.force_eisu_until:
+            is_kana = False
+        if self.logical_eisu_mode and side is None:
+            is_kana = False
+        self.ime = is_kana
         table = NICOLA_TABLE.get(key)
         if not table:
             self._send(key)
             return
 
         # 英数モードでは、親指同時打鍵なし（平打ち）は通常の英数入力を優先する
-        if (not self.ime) and (side is None):
+        if (not is_kana) and (side is None):
             self._send(key)
             return
 
@@ -277,7 +425,7 @@ class NicolaEngine:
             self._send(kana[4:])
             return
 
-        if not self.ime:
+        if not is_kana:
             self._set_ime_kana()
         self._send_romaji(kana)
 
@@ -302,6 +450,7 @@ class NicolaEngine:
             self.suppress_oneshot[idx] = True
             if idx == 0:
                 self.suppress_next_eisu_oneshot = True
+                self.suppress_next_eisu_oneshot_until = time.time() + 0.25
             elif idx == 1:
                 self.suppress_next_right_thumb_oneshot = True
             self.shift_time[idx] = None
@@ -319,6 +468,11 @@ class NicolaEngine:
 
         # 親指単打
         if idx == 0:
+            # Eisu単打直後の左親指単打遅延発火を抑止
+            if (time.time() - self.last_eisu_oneshot_at) <= 0.30:
+                self.left_oneshot_pending = False
+                self.left_oneshot_at = None
+                return
             if self.ignore_next_left_thumb_oneshot:
                 self.ignore_next_left_thumb_oneshot = False
                 self.left_oneshot_pending = False
@@ -326,7 +480,7 @@ class NicolaEngine:
                 return
             # 英数モード -> かなモード は即時反応
             # （遅延確定だと次キーイベント待ちになって切替不能に見えるため）
-            if not self.ime:
+            if not self._is_kana_mode():
                 self._set_ime_kana()
             else:
                 # かなモード中のトグルだけ遅延確定
@@ -343,15 +497,21 @@ class NicolaEngine:
     def _eisu_oneshot(self):
         self._apply_left_oneshot_if_due()
         if self.suppress_next_eisu_oneshot:
+            if time.time() <= self.suppress_next_eisu_oneshot_until:
+                self.suppress_next_eisu_oneshot = False
+                self.suppress_next_eisu_oneshot_until = 0.0
+                return
             self.suppress_next_eisu_oneshot = False
-            return
+            self.suppress_next_eisu_oneshot_until = 0.0
         # macでは英数キーが左親指キーと兼用のため、
         # この単打後に左親指単打処理が走らないよう抑止する。
+        self.last_eisu_oneshot_at = time.time()
         self.ignore_next_left_thumb_oneshot = True
-        # 英数単独打鍵:
-        # - 原則: 英数モードへ
-        # - 未確定文字がある場合: ひらがな/カタカナトグル
-        if self._has_marked_text():
+        self.left_oneshot_pending = False
+        self.left_oneshot_at = None
+        # macではトグル運用をしないため、英数キー単打は常に英数モードへ。
+        # windows側のみ、未確定文字がある場合はトグル分岐を許可する。
+        if self.os_name == "windows" and self._has_marked_text():
             self._send_first(self.toggle_keys)
             return
         self._set_ime_eisu()
@@ -367,6 +527,7 @@ class NicolaEngine:
                 self._emit_key(key, 0)
                 self.suppress_oneshot[0] = True
                 self.suppress_next_eisu_oneshot = True
+                self.suppress_next_eisu_oneshot_until = time.time() + 0.25
                 self.left_oneshot_pending = False
                 self.left_oneshot_at = None
                 logger.info(f"NICOLA: emit left {key} (thumb-first)")
@@ -400,6 +561,11 @@ class NicolaEngine:
             "NICOLA: physical keys "
             f"left={self.left_thumb}, right={self.right_thumb}, eisu={self.eisu_key}"
         )
+
+        # Windows keyhac 1.83 は U0/U1 方式の方が安定
+        if self.os_name == "windows" and hasattr(self.keymap, "defineWindowKeymap"):
+            self._bind_windows_legacy()
+            return
 
         self.keytable[f"D-{self.left_thumb}"] = lambda: self._thumb_start(0)
         self.keytable[f"U-{self.left_thumb}"] = lambda: self._thumb_stop(0)
@@ -436,7 +602,12 @@ def configure(keymap):
         os_name = platform.system().lower()
         logger.info(f"NICOLA: profile={os_name}")
 
-        keytable_global = keymap.define_keytable(focus_path_pattern="*")
+        if hasattr(keymap, "define_keytable"):
+            keytable_global = keymap.define_keytable(focus_path_pattern="*")
+        elif hasattr(keymap, "defineWindowKeymap"):
+            keytable_global = keymap.defineWindowKeymap()
+        else:
+            raise RuntimeError("Unsupported Keyhac API: cannot define keytable")
         NicolaEngine(keymap, keytable_global, os_name)
 
         logger.info("NICOLA: configure() completed")
