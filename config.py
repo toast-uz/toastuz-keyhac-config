@@ -53,12 +53,12 @@ NICOLA_TABLE = {
     "0": ("0", "KEY:Shift-0", "KEY:Shift-CloseBracket"),
     "Minus": ("KEY:Minus", "KEY:Shift-Minus", "KEY:Shift-BackSlash"),
     # 右側記号キー
-    "OpenBracket": ("KEY:OpenBracket", "KEY:Shift-OpenBracket", "KEY:OpenBracket"),
+    "OpenBracket": ("、", "KEY:Shift-OpenBracket", "KEY:OpenBracket"),
     "CloseBracket": ("KEY:CloseBracket", "KEY:Shift-CloseBracket", "KEY:CloseBracket"),
     "Q": ("。", "ぁ", ""), "W": ("か", "え", "が"), "E": ("た", "り", "だ"),
     "R": ("こ", "ゃ", "ご"), "T": ("さ", "れ", "ざ"), "Y": ("ら", "ぱ", "よ"),
     "U": ("ち", "ぢ", "に"), "I": ("く", "ぐ", "る"), "O": ("つ", "づ", "ま"),
-    "P": ("、", "ぴ", "ぇ"), "A": ("う", "を", "ゔ"), "S": ("し", "あ", "じ"),
+    "P": (",", "ぴ", "ぇ"), "A": ("う", "を", "ゔ"), "S": ("し", "あ", "じ"),
     "D": ("て", "な", "で"), "F": ("け", "ゅ", "げ"), "G": ("せ", "も", "ぜ"),
     "H": ("は", "ば", "み"), "J": ("と", "ど", "お"), "K": ("き", "ぎ", "の"),
     "L": ("い", "ぽ", "ょ"), "Semicolon": ("ん", ";", "っ"), "Z": (".", "ぅ", "ゑ"),
@@ -136,6 +136,7 @@ class NicolaEngine:
         self.pending_key_time = None
         self.left_oneshot_pending = False
         self.left_oneshot_at = None
+        self.ignore_next_left_thumb_oneshot = False
 
         self._setup()
 
@@ -202,6 +203,21 @@ class NicolaEngine:
             pass
         return False
 
+    def _is_kana_mode(self):
+        # 取得できる場合は実IME状態を優先。
+        # ただし値域が環境差で不定な場合は内部状態にフォールバックする。
+        try:
+            wnd = self.keymap.getWindow()
+            if wnd:
+                status = wnd.getImeStatus()
+                if status == IME_MODE_EISU:
+                    return False
+                if status == IME_MODE_KANA:
+                    return True
+        except Exception:
+            pass
+        return self.ime
+
     def _apply_left_oneshot_if_due(self):
         if not self.left_oneshot_pending:
             return
@@ -210,10 +226,12 @@ class NicolaEngine:
         if time.time() - self.left_oneshot_at < LEFT_ONESHOT_DELAY_SEC:
             return
 
-        if not self.ime:
+        if not self._is_kana_mode():
             self._set_ime_kana()
         else:
-            self._send_first(self.toggle_keys)
+            # macではトグルを諦める。windowsでは左親指単打でトグルする。
+            if self.os_name == "windows":
+                self._send_first(self.toggle_keys)
 
         self.left_oneshot_pending = False
         self.left_oneshot_at = None
@@ -279,16 +297,29 @@ class NicolaEngine:
 
         # 親指単打
         if idx == 0:
-            # 左親指（英数キー兼用）は単打確定を少し遅延させる
-            self.left_oneshot_pending = True
-            self.left_oneshot_at = time.time()
+            if self.ignore_next_left_thumb_oneshot:
+                self.ignore_next_left_thumb_oneshot = False
+                self.left_oneshot_pending = False
+                self.left_oneshot_at = None
+                return
+            # 英数モード -> かなモード は即時反応
+            # （遅延確定だと次キーイベント待ちになって切替不能に見えるため）
+            if not self.ime:
+                self._set_ime_kana()
+            else:
+                # かなモード中のトグルだけ遅延確定
+                self.left_oneshot_pending = True
+                self.left_oneshot_at = time.time()
         else:
-            # 英数モード中は変換しない
-            if self.ime and self.convert_key:
-                self._send(self.convert_key)
+            # 右親指単独打鍵: かなモードへ
+            if not self._is_kana_mode():
+                self._set_ime_kana()
 
     def _eisu_oneshot(self):
         self._apply_left_oneshot_if_due()
+        # macでは英数キーが左親指キーと兼用のため、
+        # この単打後に左親指単打処理が走らないよう抑止する。
+        self.ignore_next_left_thumb_oneshot = True
         # 英数単独打鍵:
         # - 原則: 英数モードへ
         # - 未確定文字がある場合: ひらがな/カタカナトグル
