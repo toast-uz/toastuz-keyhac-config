@@ -40,6 +40,17 @@ WINDOWS_EISU_WIDTH = "half"
 # False: D/U 自前判定（時間定数が効く）
 WINDOWS_USE_LEGACY_U2U3 = False
 
+# 未確定文字（変換前/変換中）時の英数キートグル機能
+ENABLE_MARKED_EISU_TOGGLE = True
+# state 0 -> 1
+MARKED_EISU_TOGGLE_KEY_0 = "Alt-Z"   # ひらがな変換
+# state 1 -> 2
+MARKED_EISU_TOGGLE_KEY_1 = "Alt-X"   # カタカナ変換
+# state 2 -> 3
+MARKED_EISU_TOGGLE_KEY_2 = "Fn-F8"    # 半角カタカナ変換
+MARKED_EISU_TOGGLE_INITIAL_STATE = 1
+# macでAXMarkedTextが取れないアプリ向けの未確定ヒント保持時間
+
 # IME モード（環境差があるため内部状態も併用）
 IME_MODE_EISU = 0
 IME_MODE_KANA = 1
@@ -284,6 +295,8 @@ class NicolaEngine:
         self._is_teams_target = False
         self._teams_target_identity = ""
         self._webview2_mode = False
+        self.marked_eisu_toggle_state = MARKED_EISU_TOGGLE_INITIAL_STATE
+        self.composing_active = False
 
         self._setup()
 
@@ -490,12 +503,26 @@ class NicolaEngine:
             # ローマ字かなモードではIMEモードを触らず Shift+上段キーを送る
             self._send(f"Shift-{key_name}")
 
+    def _act_commit_clear_and_send(self, key_name):
+        self._reset_marked_eisu_toggle_if_needed()
+        self._send(key_name)
+
+    def _act_backspace_with_compose_check(self):
+        self._reset_marked_eisu_toggle_if_needed()
+        self._send("Back")
+
     def _bind_toprow_fullwidth(self, bind):
         # 上段: 単独打鍵/通常Shift打鍵を全角送出で補強（mac/windows共通）
         for k, ch in TOPROW_PLAIN_FULLWIDTH_TEXT_MAP.items():
             bind(k, (lambda key=k, c=ch: self._act_toprow_plain(key, c)))
         for k, ch in TOPROW_SHIFT_FULLWIDTH_TEXT_MAP.items():
             bind(f"Shift-{k}", (lambda key=k, c=ch: self._act_toprow_shift_with_key(key, c)))
+        # 確定/キャンセル系キーで composing 状態を即座にクリア
+        bind("Return", (lambda: self._act_commit_clear_and_send("Return")))
+        bind("Enter", (lambda: self._act_commit_clear_and_send("Enter")))
+        bind("Escape", (lambda: self._act_commit_clear_and_send("Escape")))
+        # 未確定文字をBackspaceで消し切った場合の compose 解除を補助
+        bind("Back", self._act_backspace_with_compose_check)
 
     def _send_first(self, keys):
         for key in keys:
@@ -589,6 +616,40 @@ class NicolaEngine:
         key_expr = TOPROW_SYMBOL_ASCII_KEY_MAP.get(ch)
         if key_expr:
             self._send_ascii_key_fullwidth(key_expr)
+
+    def _set_composing_active(self, active):
+        self.composing_active = bool(active)
+
+    def _reset_marked_eisu_toggle_if_needed(self):
+        if self.marked_eisu_toggle_state != MARKED_EISU_TOGGLE_INITIAL_STATE:
+            self.marked_eisu_toggle_state = MARKED_EISU_TOGGLE_INITIAL_STATE
+            logger.info(f"NICOLA: marked-eisu-toggle reset -> {MARKED_EISU_TOGGLE_INITIAL_STATE}")
+        self._set_composing_active(False)
+
+    def _run_marked_eisu_toggle(self):
+        state = self.marked_eisu_toggle_state
+        if state >= 3:
+            state = 0
+            self.marked_eisu_toggle_state = 0
+        key_expr = None
+        if state == 0:
+            key_expr = MARKED_EISU_TOGGLE_KEY_0
+        elif state == 1:
+            key_expr = MARKED_EISU_TOGGLE_KEY_1
+        elif state == 2:
+            key_expr = MARKED_EISU_TOGGLE_KEY_2
+
+        try:
+            if key_expr:
+                self._send(key_expr)
+            self.marked_eisu_toggle_state = min(state + 1, 3)
+            logger.info(
+                f"NICOLA: marked-eisu-toggle state={state} key={key_expr} -> {self.marked_eisu_toggle_state}"
+            )
+            return True
+        except Exception as e:
+            logger.info(f"NICOLA: marked-eisu-toggle send failed key={key_expr} err={e}")
+            return False
 
     def _send_text(self, text, prefer_key_on_mac=True):
         # mac: 必要時のみキー送信に変換を試す（clipboard禁止のため）
@@ -701,6 +762,13 @@ class NicolaEngine:
             pass
         return False
 
+    def _is_preedit_active_for_toggle(self):
+        if self.os_name == "windows":
+            return False
+        if self._has_marked_text():
+            return True
+        return self.composing_active
+
     def _is_kana_mode(self):
         # 取得できる場合は実IME状態を優先。
         # ただし値域が環境差で不定な場合は内部状態にフォールバックする。
@@ -739,6 +807,8 @@ class NicolaEngine:
         self.left_oneshot_at = None
 
     def _emit_key(self, key, side):
+        # 通常入力が進んだら、未確定時英数トグル状態はリセット
+        self._reset_marked_eisu_toggle_if_needed()
         is_kana = self._is_kana_mode()
         if time.time() <= self.force_eisu_until:
             is_kana = False
@@ -776,8 +846,10 @@ class NicolaEngine:
             self._set_ime_kana()
         if USE_UNIFIED_JIS_KANA:
             if self._send_jis_kana(kana):
+                self._set_composing_active(True)
                 return
         self._send_romaji(kana)
+        self._set_composing_active(True)
 
     def _apply_pending_plain(self):
         if self.pending_key:
@@ -855,9 +927,13 @@ class NicolaEngine:
                 if self.convert_key:
                     self._send(self.convert_key)
             else:
-                # 右親指単独打鍵: かなモードへ
-                if not self._is_kana_mode():
-                    self._set_ime_kana()
+                # mac: 未確定文字がある場合は変換、なければかなモードへ
+                if self._has_marked_text():
+                    if self.convert_key:
+                        self._send(self.convert_key)
+                else:
+                    if not self._is_kana_mode():
+                        self._set_ime_kana()
 
     def _eisu_oneshot(self):
         self._apply_left_oneshot_if_due()
@@ -874,6 +950,10 @@ class NicolaEngine:
         self.ignore_next_left_thumb_oneshot = True
         self.left_oneshot_pending = False
         self.left_oneshot_at = None
+        if self.os_name != "windows" and ENABLE_MARKED_EISU_TOGGLE and self._is_preedit_active_for_toggle():
+            if self._run_marked_eisu_toggle():
+                return
+        self._reset_marked_eisu_toggle_if_needed()
         # 英数は常に英数モードへ
         self._set_ime_eisu()
 
