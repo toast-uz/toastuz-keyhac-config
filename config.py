@@ -35,6 +35,10 @@ USE_UNIFIED_JIS_KANA = True
 # "half": 半角英数 (VK_DBE_SBCSCHAR=243)
 # "full": 全角英数 (VK_DBE_DBCSCHAR=244)
 WINDOWS_EISU_WIDTH = "half"
+# Windows の同時打鍵判定方式
+# True: keyhac U2/U3（時間定数は効かない）
+# False: D/U 自前判定（時間定数が効く）
+WINDOWS_USE_LEGACY_U2U3 = False
 
 # IME モード（環境差があるため内部状態も併用）
 IME_MODE_EISU = 0
@@ -458,16 +462,25 @@ class NicolaEngine:
         logger.info(f"NICOLA[{self.input_key_profile}]: eisu oneshot")
         self._eisu_oneshot()
 
-    def _act_toprow_plain(self, ch):
+    def _act_toprow_plain(self, key_name, ch):
         self._ensure_input_profile()
+        if not self._is_kana_mode():
+            self._send(key_name)
+            return
         self._send_toprow_fullwidth(ch)
 
-    def _act_toprow_shift(self, ch):
+    def _act_toprow_shift(self, key_name, ch):
         self._ensure_input_profile()
+        if not self._is_kana_mode():
+            self._send(f"Shift-{key_name}")
+            return
         self._send_toprow_fullwidth(ch)
 
     def _act_toprow_shift_with_key(self, key_name, ch):
         self._ensure_input_profile()
+        if not self._is_kana_mode():
+            self._send(f"Shift-{key_name}")
+            return
         if self._send_text(ch, prefer_key_on_mac=False):
             return
         # 文字直送できない環境では、通常の Shift+上段キーを送る
@@ -476,7 +489,7 @@ class NicolaEngine:
     def _bind_toprow_fullwidth(self, bind):
         # 上段: 単独打鍵/通常Shift打鍵を全角送出で補強（mac/windows共通）
         for k, ch in TOPROW_PLAIN_FULLWIDTH_TEXT_MAP.items():
-            bind(k, (lambda c=ch: self._act_toprow_plain(c)))
+            bind(k, (lambda key=k, c=ch: self._act_toprow_plain(key, c)))
         for k, ch in TOPROW_SHIFT_FULLWIDTH_TEXT_MAP.items():
             bind(f"Shift-{k}", (lambda key=k, c=ch: self._act_toprow_shift_with_key(key, c)))
 
@@ -902,6 +915,7 @@ class NicolaEngine:
 
     def _setup(self):
         logger.info(f"NICOLA: unified-jis-kana-send={USE_UNIFIED_JIS_KANA}")
+        logger.info(f"NICOLA: windows-simult-mode={'legacy-u2u3' if WINDOWS_USE_LEGACY_U2U3 else 'timed-du'}")
         logger.info(
             "NICOLA: physical keys "
             f"left={self.left_thumb}, right={self.right_thumb}, eisu={self.eisu_key}"
@@ -912,8 +926,12 @@ class NicolaEngine:
         if self.os_name != "windows":
             self._set_input_profile("mac")
 
-        # Windows keyhac 1.83 は U2/U3 方式を使用
-        if self.os_name == "windows" and hasattr(self.keymap, "defineWindowKeymap"):
+        # Windows: legacy U2/U3 を使う場合のみこちらに入る
+        if (
+            self.os_name == "windows"
+            and WINDOWS_USE_LEGACY_U2U3
+            and hasattr(self.keymap, "defineWindowKeymap")
+        ):
             self._bind_windows_legacy()
             return
 
