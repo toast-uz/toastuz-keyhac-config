@@ -483,8 +483,12 @@ class NicolaEngine:
             return
         if self._send_text(ch, prefer_key_on_mac=False):
             return
-        # 文字直送できない環境では、通常の Shift+上段キーを送る
-        self._send_ascii_key_fullwidth(f"Shift-{key_name}")
+        if USE_UNIFIED_JIS_KANA:
+            # JISかな統一モードでは従来動作（全角寄せ）を維持
+            self._send_ascii_key_fullwidth(f"Shift-{key_name}")
+        else:
+            # ローマ字かなモードではIMEモードを触らず Shift+上段キーを送る
+            self._send(f"Shift-{key_name}")
 
     def _bind_toprow_fullwidth(self, bind):
         # 上段: 単独打鍵/通常Shift打鍵を全角送出で補強（mac/windows共通）
