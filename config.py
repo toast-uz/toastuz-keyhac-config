@@ -23,22 +23,14 @@ class _FallbackLogger:
 
 # 同時打鍵判定幅（秒）
 SIMULT_WINDOW_SEC = 0.18
-# 左親指はやや広めに判定
-LEFT_SIMULT_WINDOW_SEC = 0.28
-# 左親指単打（英数キー兼用）の遅延確定幅（秒）
-LEFT_ONESHOT_DELAY_SEC = 0.25
 # 英数切替直後にIME反映が遅れるアプリ向けの保護時間
-EISU_GUARD_SEC = 0.35
+EISU_GUARD_SEC = SIMULT_WINDOW_SEC
 # 実験: mac/windows 共通で JISかなキー送出を使う
 USE_UNIFIED_JIS_KANA = True
 # Windows 英数モード時の文字幅
 # "half": 半角英数 (VK_DBE_SBCSCHAR=243)
 # "full": 全角英数 (VK_DBE_DBCSCHAR=244)
 WINDOWS_EISU_WIDTH = "half"
-# Windows の同時打鍵判定方式
-# True: keyhac U2/U3（時間定数は効かない）
-# False: D/U 自前判定（時間定数が効く）
-WINDOWS_USE_LEGACY_U2U3 = False
 
 # 未確定文字（変換前/変換中）時の英数キートグル機能
 ENABLE_MARKED_EISU_TOGGLE = True
@@ -292,9 +284,6 @@ class NicolaEngine:
         self.logical_eisu_mode = False
         self.last_eisu_oneshot_at = 0.0
         self.input_key_profile = key_profile
-        self._is_teams_target = False
-        self._teams_target_identity = ""
-        self._webview2_mode = False
         self.marked_eisu_toggle_state = MARKED_EISU_TOGGLE_INITIAL_STATE
         self.composing_active = False
 
@@ -309,40 +298,6 @@ class NicolaEngine:
     def _ensure_input_profile(self):
         if self.input_key_profile is None:
             self._set_input_profile("windows-vk" if self.os_name == "windows" else "mac")
-
-    def _bind_windows_legacy(self):
-        left_mod_vk = 29
-        right_mod_vk = 28
-        logger.info(
-            "NICOLA: windows-thumb-keys "
-            f"left=({left_mod_vk}) right=({right_mod_vk}) profile={self.input_key_profile}"
-        )
-        left_mod_key = f"({left_mod_vk})"
-        right_mod_key = f"({right_mod_vk})"
-
-        if hasattr(self.keymap, "defineModifier"):
-            # 指示どおり User2/User3 を使用
-            self.keymap.defineModifier(left_mod_vk, "User2")
-            self.keymap.defineModifier(right_mod_vk, "User3")
-
-        def bind(expr, fn):
-            self.keytable[expr] = fn
-
-        # 平打ち（プロファイル固定はしない。親指イベントで確定させる）
-        for key in NICOLA_MAIN_KEYS:
-            bind(key, (lambda k=key: self._act_plain(k)))
-
-        # 同時打鍵（左/右）
-        for key in NICOLA_MAIN_KEYS:
-            bind(f"U2-{key}", (lambda k=key: self._act_left(k)))
-            bind(f"U3-{key}", (lambda k=key: self._act_right(k)))
-
-        # 単打
-        bind(f"O-{left_mod_key}", lambda: self._act_left_oneshot())
-        bind(f"O-{right_mod_key}", lambda: self._act_right_oneshot())
-        bind(f"O-{self.eisu_key}", lambda: self._act_eisu_oneshot())
-
-        self._bind_toprow_fullwidth(bind)
 
     def _send(self, *keys):
         # keyhac mac (snake_case) / keyhac windows (camelCase) 互換
@@ -372,90 +327,18 @@ class NicolaEngine:
             except Exception:
                 logger.warning(f"NICOLA: cannot send key '{k}'")
 
-    def _detect_teams_target(self):
-        """
-        編集対象が Teams かをベストエフォートで判定する。
-        挙動は変えず、判定結果はログ用途のみ。
-        """
-        fields = []
-        wnd = None
-        try:
-            if hasattr(self.keymap, "getWindow"):
-                wnd = self.keymap.getWindow()
-            elif hasattr(self.keymap, "get_window"):
-                wnd = self.keymap.get_window()
-        except Exception:
-            wnd = None
-
-        if wnd:
-            for name in (
-                "getProcessName",
-                "get_process_name",
-                "getClassName",
-                "get_class_name",
-                "getText",
-                "get_text",
-            ):
-                try:
-                    if hasattr(wnd, name):
-                        v = getattr(wnd, name)()
-                        if v:
-                            fields.append(str(v))
-                except Exception:
-                    pass
-
-        try:
-            focus = getattr(self.keymap, "focus", None)
-            if focus:
-                for attr_name in ("AXTitle", "AXRoleDescription"):
-                    try:
-                        if hasattr(focus, "get_attribute_value"):
-                            v = focus.get_attribute_value(attr_name)
-                            if v:
-                                fields.append(str(v))
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-        joined = " | ".join(fields)
-        hay = joined.lower()
-        is_teams = (
-            ("teams" in hay)
-            or ("msteams" in hay)
-            or ("ms-teams" in hay)
-            or ("teams2" in hay)
-        )
-        return is_teams, joined
-
-    def _refresh_teams_target_state(self):
-        is_teams, identity = self._detect_teams_target()
-        ident_l = identity.lower()
-        webview2_mode = ("msedgewebview2.exe" in ident_l)
-        if (is_teams != self._is_teams_target) or (identity != self._teams_target_identity):
-            self._is_teams_target = is_teams
-            self._teams_target_identity = identity
-            self._webview2_mode = webview2_mode
-            logger.info(f"NICOLA: webview2-mode={'enable' if self._webview2_mode else 'disable'}")
-        else:
-            # 状態不変でもモード値は更新しておく（将来の分岐用）
-            self._webview2_mode = webview2_mode
-
     # 共通アクション（入力経路差異を吸収）
     def _act_plain(self, key):
-        self._refresh_teams_target_state()
         self._ensure_input_profile()
         logger.info(f"NICOLA[{self.input_key_profile}]: plain {key}")
         self._emit_key(key, None)
 
     def _act_left(self, key):
-        self._refresh_teams_target_state()
         self._ensure_input_profile()
         logger.info(f"NICOLA[{self.input_key_profile}]: left {key}")
         self._emit_key(key, 0)
 
     def _act_right(self, key):
-        self._refresh_teams_target_state()
         self._ensure_input_profile()
         logger.info(f"NICOLA[{self.input_key_profile}]: right {key}")
         self._emit_key(key, 1)
@@ -463,45 +346,25 @@ class NicolaEngine:
     def _act_left_oneshot(self):
         self._ensure_input_profile()
         logger.info(f"NICOLA[{self.input_key_profile}]: left oneshot")
-        self._thumb_stop(0)
+        self._control_event("thumb_stop", idx=0)
 
     def _act_right_oneshot(self):
         self._ensure_input_profile()
         logger.info(f"NICOLA[{self.input_key_profile}]: right oneshot")
-        self._thumb_stop(1)
+        self._control_event("thumb_stop", idx=1)
 
     def _act_eisu_oneshot(self):
         self._ensure_input_profile()
         logger.info(f"NICOLA[{self.input_key_profile}]: eisu oneshot")
-        self._eisu_oneshot()
+        self._control_event("eisu")
 
     def _act_toprow_plain(self, key_name, ch):
         self._ensure_input_profile()
-        if not self._is_kana_mode():
-            self._send(key_name)
-            return
-        self._send_toprow_fullwidth(ch)
-
-    def _act_toprow_shift(self, key_name, ch):
-        self._ensure_input_profile()
-        if not self._is_kana_mode():
-            self._send(f"Shift-{key_name}")
-            return
-        self._send_toprow_fullwidth(ch)
+        self._control_event("toprow_plain", key_name=key_name, ch=ch)
 
     def _act_toprow_shift_with_key(self, key_name, ch):
         self._ensure_input_profile()
-        if not self._is_kana_mode():
-            self._send(f"Shift-{key_name}")
-            return
-        if self._send_text(ch, prefer_key_on_mac=False):
-            return
-        if USE_UNIFIED_JIS_KANA:
-            # JISかな統一モードでは従来動作（全角寄せ）を維持
-            self._send_ascii_key_fullwidth(f"Shift-{key_name}")
-        else:
-            # ローマ字かなモードではIMEモードを触らず Shift+上段キーを送る
-            self._send(f"Shift-{key_name}")
+        self._control_event("toprow_shift", key_name=key_name, ch=ch)
 
     def _act_commit_clear_and_send(self, key_name):
         self._reset_marked_eisu_toggle_if_needed()
@@ -510,6 +373,71 @@ class NicolaEngine:
     def _act_backspace_with_compose_check(self):
         self._reset_marked_eisu_toggle_if_needed()
         self._send("Back")
+
+    def _control_event(self, event, **kw):
+        if event == "eisu":
+            return self._eisu_oneshot()
+        if event == "thumb_stop":
+            idx = kw["idx"]
+            if idx == 0:
+                return self._thumb_stop_left()
+            return self._thumb_stop_right()
+        if event == "toprow_plain":
+            key_name = kw["key_name"]
+            ch = kw["ch"]
+            if not self._is_kana_mode():
+                self._send(key_name)
+                return
+            self._send_toprow_fullwidth(ch)
+            return
+        if event == "toprow_shift":
+            key_name = kw["key_name"]
+            ch = kw["ch"]
+            if not self._is_kana_mode():
+                self._send(f"Shift-{key_name}")
+                return
+            if self._send_text(ch, prefer_key_on_mac=False):
+                return
+            if USE_UNIFIED_JIS_KANA:
+                self._send_ascii_key_mode(f"Shift-{key_name}", fullwidth=True)
+            else:
+                self._send(f"Shift-{key_name}")
+            return
+
+    def _thumb_stop_left(self):
+        # Eisu単打直後の左親指単打遅延発火を抑止
+        if (time.time() - self.last_eisu_oneshot_at) <= SIMULT_WINDOW_SEC:
+            self._clear_left_oneshot_pending()
+            return
+        if self.ignore_next_left_thumb_oneshot:
+            self.ignore_next_left_thumb_oneshot = False
+            self._clear_left_oneshot_pending()
+            return
+        if self.os_name == "windows":
+            if self._is_kana_mode():
+                self._send_first(self.toggle_keys)
+            else:
+                self._set_ime_kana()
+            return
+        if not self._is_kana_mode():
+            self._set_ime_kana()
+        else:
+            self.left_oneshot_pending = True
+            self.left_oneshot_at = time.time()
+
+    def _thumb_stop_right(self):
+        if self.suppress_next_right_thumb_oneshot:
+            self.suppress_next_right_thumb_oneshot = False
+            return
+        if self.os_name == "windows":
+            if self.convert_key:
+                self._send(self.convert_key)
+            return
+        if self._has_marked_text():
+            if self.convert_key:
+                self._send(self.convert_key)
+        elif not self._is_kana_mode():
+            self._set_ime_kana()
 
     def _bind_toprow_fullwidth(self, bind):
         # 上段: 単独打鍵/通常Shift打鍵を全角送出で補強（mac/windows共通）
@@ -568,18 +496,18 @@ class NicolaEngine:
             top_sym_fb = TOPROW_SYMBOL_ASCII_KEY_MAP.get(kana)
             if top_sym_fb:
                 logger.info(f"NICOLA: direct text failed for '{kana}', fallback key={top_sym_fb}")
-                self._send_ascii_key_fullwidth(top_sym_fb)
+                self._send_ascii_key_mode(top_sym_fb, fullwidth=True)
                 return True
             return False
 
         top_sym = TOPROW_SYMBOL_ASCII_KEY_MAP.get(kana)
         if top_sym:
-            self._send_ascii_key_fullwidth(top_sym)
+            self._send_ascii_key_mode(top_sym, fullwidth=True)
             return True
 
         ascii_key = NICOLA_ASCII_FALLBACK_MAP.get(kana)
         if ascii_key:
-            self._send_ascii_key(ascii_key)
+            self._send_ascii_key_mode(ascii_key)
             return True
 
         if kana == "ー":
@@ -615,10 +543,14 @@ class NicolaEngine:
             return
         key_expr = TOPROW_SYMBOL_ASCII_KEY_MAP.get(ch)
         if key_expr:
-            self._send_ascii_key_fullwidth(key_expr)
+            self._send_ascii_key_mode(key_expr, fullwidth=True)
 
     def _set_composing_active(self, active):
         self.composing_active = bool(active)
+
+    def _clear_left_oneshot_pending(self):
+        self.left_oneshot_pending = False
+        self.left_oneshot_at = None
 
     def _reset_marked_eisu_toggle_if_needed(self):
         if self.marked_eisu_toggle_state != MARKED_EISU_TOGGLE_INITIAL_STATE:
@@ -726,19 +658,11 @@ class NicolaEngine:
         self.force_eisu_until = time.time() + EISU_GUARD_SEC
         self.logical_eisu_mode = True
 
-    def _send_ascii_key(self, key_expr):
+    def _send_ascii_key_mode(self, key_expr, fullwidth=False):
         was_kana = self._is_kana_mode()
         if was_kana:
             self._set_ime_eisu()
-        self._send(key_expr)
-        if was_kana:
-            self._set_ime_kana()
-
-    def _send_ascii_key_fullwidth(self, key_expr):
-        was_kana = self._is_kana_mode()
-        if was_kana:
-            self._set_ime_eisu()
-        if self.os_name == "windows" and self.eisu_width_full_key:
+        if fullwidth and self.os_name == "windows" and self.eisu_width_full_key:
             self._send(self.eisu_width_full_key)
         self._send(key_expr)
         if was_kana:
@@ -793,7 +717,7 @@ class NicolaEngine:
             return
         if self.left_oneshot_at is None:
             return
-        if time.time() - self.left_oneshot_at < LEFT_ONESHOT_DELAY_SEC:
+        if time.time() - self.left_oneshot_at < SIMULT_WINDOW_SEC:
             return
 
         if not self._is_kana_mode():
@@ -835,7 +759,7 @@ class NicolaEngine:
             return
 
         if kana.startswith("KEY_ASCII:"):
-            self._send_ascii_key(kana[len("KEY_ASCII:"):])
+            self._send_ascii_key_mode(kana[len("KEY_ASCII:"):])
             return
 
         if kana.startswith("KEY:"):
@@ -864,7 +788,7 @@ class NicolaEngine:
         self.suppress_oneshot[idx] = False
 
         # 直前文字が保留中なら同時打鍵として確定
-        simult_window = LEFT_SIMULT_WINDOW_SEC if idx == 0 else SIMULT_WINDOW_SEC
+        simult_window = SIMULT_WINDOW_SEC
         if self.pending_key and self.pending_key_time and now - self.pending_key_time <= simult_window:
             self._emit_key(self.pending_key, idx)
             self.pending_key = None
@@ -872,7 +796,7 @@ class NicolaEngine:
             self.suppress_oneshot[idx] = True
             if idx == 0:
                 self.suppress_next_eisu_oneshot = True
-                self.suppress_next_eisu_oneshot_until = time.time() + 0.25
+                self.suppress_next_eisu_oneshot_until = time.time() + SIMULT_WINDOW_SEC
             elif idx == 1:
                 self.suppress_next_right_thumb_oneshot = True
             self.shift_time[idx] = None
@@ -888,52 +812,7 @@ class NicolaEngine:
         if self.suppress_oneshot[idx]:
             return
 
-        # 親指単打
-        if idx == 0:
-            # Eisu単打直後の左親指単打遅延発火を抑止
-            if (time.time() - self.last_eisu_oneshot_at) <= 0.30:
-                self.left_oneshot_pending = False
-                self.left_oneshot_at = None
-                return
-            if self.ignore_next_left_thumb_oneshot:
-                self.ignore_next_left_thumb_oneshot = False
-                self.left_oneshot_pending = False
-                self.left_oneshot_at = None
-                return
-            # 無変換:
-            # - 英数時: かなモードへ遷移
-            # - かな時: かなトグル
-            if self.os_name == "windows":
-                if self._is_kana_mode():
-                    self._send_first(self.toggle_keys)
-                else:
-                    self._set_ime_kana()
-            else:
-                # 英数モード -> かなモード は即時反応
-                # （遅延確定だと次キーイベント待ちになって切替不能に見えるため）
-                if not self._is_kana_mode():
-                    self._set_ime_kana()
-                else:
-                    # かなモード中のトグルだけ遅延確定
-                    self.left_oneshot_pending = True
-                    self.left_oneshot_at = time.time()
-        else:
-            if self.suppress_next_right_thumb_oneshot:
-                self.suppress_next_right_thumb_oneshot = False
-                return
-            # 変換:
-            # - Windows は入力モードを不用意に触らず、変換キーのみ送出
-            if self.os_name == "windows":
-                if self.convert_key:
-                    self._send(self.convert_key)
-            else:
-                # mac: 未確定文字がある場合は変換、なければかなモードへ
-                if self._has_marked_text():
-                    if self.convert_key:
-                        self._send(self.convert_key)
-                else:
-                    if not self._is_kana_mode():
-                        self._set_ime_kana()
+        self._control_event("thumb_stop", idx=idx)
 
     def _eisu_oneshot(self):
         self._apply_left_oneshot_if_due()
@@ -948,8 +827,7 @@ class NicolaEngine:
         # この単打後に左親指単打処理が走らないよう抑止する。
         self.last_eisu_oneshot_at = time.time()
         self.ignore_next_left_thumb_oneshot = True
-        self.left_oneshot_pending = False
-        self.left_oneshot_at = None
+        self._clear_left_oneshot_pending()
         if self.os_name != "windows" and ENABLE_MARKED_EISU_TOGGLE and self._is_preedit_active_for_toggle():
             if self._run_marked_eisu_toggle():
                 return
@@ -964,11 +842,11 @@ class NicolaEngine:
             now = time.time()
 
             # 親指先押し -> 文字後押し の同時打鍵を優先判定
-            if self.shift_down[0] and self.shift_time[0] and now - self.shift_time[0] <= LEFT_SIMULT_WINDOW_SEC:
+            if self.shift_down[0] and self.shift_time[0] and now - self.shift_time[0] <= SIMULT_WINDOW_SEC:
                 self._emit_key(key, 0)
                 self.suppress_oneshot[0] = True
                 self.suppress_next_eisu_oneshot = True
-                self.suppress_next_eisu_oneshot_until = time.time() + 0.25
+                self.suppress_next_eisu_oneshot_until = time.time() + SIMULT_WINDOW_SEC
                 self.left_oneshot_pending = False
                 self.left_oneshot_at = None
                 logger.info(f"NICOLA: emit left {key} (thumb-first)")
@@ -999,25 +877,15 @@ class NicolaEngine:
 
     def _setup(self):
         logger.info(f"NICOLA: unified-jis-kana-send={USE_UNIFIED_JIS_KANA}")
-        logger.info(f"NICOLA: windows-simult-mode={'legacy-u2u3' if WINDOWS_USE_LEGACY_U2U3 else 'timed-du'}")
+        logger.info("NICOLA: windows-simult-mode=timed-du")
         logger.info(
             "NICOLA: physical keys "
             f"left={self.left_thumb}, right={self.right_thumb}, eisu={self.eisu_key}"
         )
         if self.os_name == "windows":
             logger.info("NICOLA: windows-candidate-detect=limited(false-by-default)")
-        self._refresh_teams_target_state()
         if self.os_name != "windows":
             self._set_input_profile("mac")
-
-        # Windows: legacy U2/U3 を使う場合のみこちらに入る
-        if (
-            self.os_name == "windows"
-            and WINDOWS_USE_LEGACY_U2U3
-            and hasattr(self.keymap, "defineWindowKeymap")
-        ):
-            self._bind_windows_legacy()
-            return
 
         # non-legacy（主に mac）でも上段の単独/Shiftを同じ全角ルートへ
         def bind(expr, fn):
