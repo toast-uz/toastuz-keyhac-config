@@ -134,6 +134,12 @@ ROMAJI_KEYNAME_MAP = {
     ";": "Semicolon",
 }
 
+# 物理キー名の揺れを NICOLA 主キー名へ正規化する。
+# 例: 一部 mac/JIS 環境では数字段 7 の物理キーが Quote として来る。
+NICOLA_MAIN_KEY_ALIASES = {
+    "Quote": "7",
+}
+
 DIRECT_KEYSEQ_MAP = {}
 
 # JISかな入力用: かな1文字 -> 物理キー
@@ -210,10 +216,10 @@ MAC_CHAR_KEY_MAP = {
     "？": "Shift-Slash",
     "／": "Slash",
     "～": "Shift-Caret",
-    "「": "Shift-OpenBracket",
-    "」": "Shift-CloseBracket",
-    "〔": "OpenBracket",
-    "〕": "CloseBracket",
+    "「": "OpenBracket",
+    "」": "CloseBracket",
+    "〔": "Shift-OpenBracket",
+    "〕": "Shift-CloseBracket",
     "（": "Shift-8",
     "）": "Shift-9",
     "『": "Shift-Comma",
@@ -836,7 +842,11 @@ class NicolaEngine:
         self._set_ime_eisu()
 
     def _key_down(self, key):
+        raw_key = key
         def _f():
+            key = raw_key
+            if self.os_name != "windows":
+                key = NICOLA_MAIN_KEY_ALIASES.get(key, key)
             self._apply_left_oneshot_if_due()
             self._apply_pending_plain()
             now = time.time()
@@ -865,7 +875,11 @@ class NicolaEngine:
         return _f
 
     def _key_up(self, key):
+        raw_key = key
         def _f():
+            key = raw_key
+            if self.os_name != "windows":
+                key = NICOLA_MAIN_KEY_ALIASES.get(key, key)
             self._apply_left_oneshot_if_due()
             if self.pending_key == key:
                 # 親指未介入なら平面確定
