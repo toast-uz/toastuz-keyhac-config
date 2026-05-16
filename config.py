@@ -21,16 +21,16 @@ class _FallbackLogger:
 # NICOLA constants
 # =====================================================
 
+# -----------------------------------------------------
+# 共通定義
+# -----------------------------------------------------
+
 # 同時打鍵判定幅（秒）
 SIMULT_WINDOW_SEC = 0.18
 # 英数切替直後にIME反映が遅れるアプリ向けの保護時間
 EISU_GUARD_SEC = SIMULT_WINDOW_SEC
-# 実験: mac/windows 共通で JISかなキー送出を使う
+# JISかなキー送出を使うかどうか
 USE_UNIFIED_JIS_KANA = True
-# Windows 英数モード時の文字幅
-# "half": 半角英数 (VK_DBE_SBCSCHAR=243)
-# "full": 全角英数 (VK_DBE_DBCSCHAR=244)
-WINDOWS_EISU_WIDTH = "half"
 
 # 未確定文字（変換前/変換中）時の英数キートグル機能
 ENABLE_MARKED_EISU_TOGGLE = True
@@ -41,27 +41,12 @@ MARKED_EISU_TOGGLE_KEY_1 = "Alt-X"   # カタカナ変換
 # state 2 -> 3
 MARKED_EISU_TOGGLE_KEY_2 = "Fn-F8"    # 半角カタカナ変換
 MARKED_EISU_TOGGLE_INITIAL_STATE = 1
-# macでAXMarkedTextが取れないアプリ向けの未確定ヒント保持時間
 
 # IME モード（環境差があるため内部状態も併用）
 IME_MODE_EISU = 0
 IME_MODE_KANA = 1
 
-# 物理キー名（OSにより切替）
-# keyhac 1.x(Windows) では日本語キー名が異なるため VKコード表記を使う
-# - 変換: VK_CONVERT(28)
-# - 無変換: VK_NONCONVERT(29)
-# - 英数相当: VK_KANJI(25) を利用（環境により未搭載の場合あり）
-WIN_MUHENKAN = "(29)"
-WIN_HENKAN = "(28)"
-WIN_EISU = "(25)"
-MAC_LEFT_THUMB = "Eisu"
-MAC_RIGHT_THUMB = "Kana"
-MAC_EISU = "Eisu"
-MAC_RIGHT_THUMB_SINGLE_CONVERT_KEY = None
-MAC_TOGGLE_KEYS = ["Ctrl-J", "Kana"]
-
-# NICOLA 同時打鍵対象キー
+# NICOLA 同時打鍵対象キー（共通）
 NICOLA_MAIN_KEYS = [
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "Minus",
     "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P",
@@ -105,6 +90,80 @@ NICOLA_TABLE = {
     "CloseBracket": (None, None, None), "BackSlash": (None, None, None),
 }
 
+# -----------------------------------------------------
+# JISかな入力専用定義
+# -----------------------------------------------------
+
+# JISかな入力用: かな1文字 -> 物理キー
+# 例: 「お」なら "6"
+JIS_KANA_KEY_MAP = {
+    "あ": "3", "い": "E", "う": "4", "え": "5", "お": "6",
+    "か": "T", "き": "G", "く": "H", "け": "Colon", "こ": "B",
+    "さ": "X", "し": "D", "す": "R", "せ": "P", "そ": "C",
+    "た": "Q", "ち": "A", "つ": "Z", "て": "W", "と": "S",
+    "な": "U", "に": "I", "ぬ": "1", "ね": "Comma", "の": "K",
+    "は": "F", "ひ": "V", "ふ": "2", "へ": "Caret", "ほ": "Minus",
+    "ま": "J", "み": "N", "む": "CloseBracket", "め": "Slash", "も": "M",
+    "や": "7", "ゆ": "8", "よ": "9",
+    "ら": "O", "り": "L", "る": "Period", "れ": "Semicolon", "ろ": "Underscore",
+    "わ": "0", "を": "Shift-0", "ん": "Y",
+    "ぁ": "Shift-3", "ぃ": "Shift-E", "ぅ": "Shift-4", "ぇ": "Shift-5", "ぉ": "Shift-6",
+    "ゃ": "Shift-7", "ゅ": "Shift-8", "ょ": "Shift-9", "っ": "Shift-Z",
+    "ー": "BackSlash",
+    "゛": "Atmark", "゜": "OpenBracket",
+    "，": "Shift-Comma", "．": "Shift-Period",
+    "、": "Shift-Comma", "。": "Shift-Period", "・": "Shift-Slash",
+}
+
+# JISかな送出では扱いづらい文字は、英数キー送出（必要時のみ一時英数化）で処理
+CHAR_TO_KEY_ASCII_FALLBACK_MAP = {
+    "１": "1", "２": "2", "３": "3", "４": "4", "５": "5",
+    "６": "6", "７": "7", "８": "8", "９": "9", "０": "0",
+    "－": "Minus",
+}
+
+CHAR_TO_KEY_TOPROW_SYMBOL_MAP = {
+    "？": "Shift-Slash",
+    "／": "Slash",
+    "～": "Shift-Caret",
+    "「": "Shift-OpenBracket",
+    "」": "Shift-CloseBracket",
+    "〔": "OpenBracket",
+    "〕": "CloseBracket",
+    "（": "Shift-8",
+    "）": "Shift-9",
+    "『": "Shift-Comma",
+    "』": "Shift-Period",
+}
+TOPROW_DIRECT_FULLWIDTH_SYMBOLS = set(CHAR_TO_KEY_TOPROW_SYMBOL_MAP.keys())
+KEY_TO_CHAR_TOPROW_PLAIN_FULLWIDTH_MAP = {
+    "1": "１", "2": "２", "3": "３", "4": "４", "5": "５",
+    "6": "６", "7": "７", "8": "８", "9": "９", "0": "０",
+    "Minus": "－",
+}
+KEY_TO_CHAR_TOPROW_SHIFT_FULLWIDTH_MAP = {
+    "1": "！", "2": "／", "3": "～", "4": "「", "5": "」",
+    "6": "〔", "7": "〕", "8": "（", "9": "）", "0": "『",
+    "Minus": "』",
+}
+
+# 濁点・半濁点合成（JISかな送出）
+DAKUTEN_BASE_MAP = {
+    "が": "か", "ぎ": "き", "ぐ": "く", "げ": "け", "ご": "こ",
+    "ざ": "さ", "じ": "し", "ず": "す", "ぜ": "せ", "ぞ": "そ",
+    "だ": "た", "ぢ": "ち", "づ": "つ", "で": "て", "ど": "と",
+    "ば": "は", "び": "ひ", "ぶ": "ふ", "べ": "へ", "ぼ": "ほ",
+    "ゔ": "う", "ヴ": "う",
+}
+
+HANDAKUTEN_BASE_MAP = {
+    "ぱ": "は", "ぴ": "ひ", "ぷ": "ふ", "ぺ": "へ", "ぽ": "ほ",
+}
+
+# -----------------------------------------------------
+# ローマ字かな入力専用定義
+# -----------------------------------------------------
+
 # かな -> ローマ字（IMEローマ字入力向け）
 ROMAJI_MAP = {
     "あ": "A", "い": "I", "う": "U", "え": "E", "お": "O",
@@ -134,81 +193,50 @@ ROMAJI_KEYNAME_MAP = {
     ";": "Semicolon",
 }
 
+DIRECT_KEYSEQ_MAP = {}
+
+# -----------------------------------------------------
+# Windows専用定義
+# -----------------------------------------------------
+
+# keyhac 1.x(Windows) では日本語キー名が異なるため VKコード表記を使う
+# - 変換: VK_CONVERT(28)
+# - 無変換: VK_NONCONVERT(29)
+# - 英数相当: VK_KANJI(25) を利用（環境により未搭載の場合あり）
+WIN_MUHENKAN = "(29)"
+WIN_HENKAN = "(28)"
+WIN_EISU = "(25)"
+
+# Windows 英数モード時の文字幅
+# "half": 半角英数 (VK_DBE_SBCSCHAR=243)
+# "full": 全角英数 (VK_DBE_DBCSCHAR=244)
+WINDOWS_EISU_WIDTH = "half"
+
+# -----------------------------------------------------
+# Mac専用定義
+# -----------------------------------------------------
+
+MAC_LEFT_THUMB = "Eisu"
+MAC_RIGHT_THUMB = "Kana"
+MAC_EISU = "Eisu"
+MAC_RIGHT_THUMB_SINGLE_CONVERT_KEY = None
+MAC_TOGGLE_KEYS = ["Ctrl-J", "Kana"]
+
 # 物理キー名の揺れを NICOLA 主キー名へ正規化する。
 # 例: 一部 mac/JIS 環境では数字段 7 の物理キーが Quote として来る。
-NICOLA_MAIN_KEY_ALIASES = {
+MAC_KEY_ALIAS_MAP_MAIN = {
     "Quote": "7",
 }
 
-DIRECT_KEYSEQ_MAP = {}
-
-# JISかな入力用: かな1文字 -> 物理キー
-# 例: 「お」なら "6"
-JIS_KANA_KEY_MAP = {
-    "あ": "3", "い": "E", "う": "4", "え": "5", "お": "6",
-    "か": "T", "き": "G", "く": "H", "け": "Colon", "こ": "B",
-    "さ": "X", "し": "D", "す": "R", "せ": "P", "そ": "C",
-    "た": "Q", "ち": "A", "つ": "Z", "て": "W", "と": "S",
-    "な": "U", "に": "I", "ぬ": "1", "ね": "Comma", "の": "K",
-    "は": "F", "ひ": "V", "ふ": "2", "へ": "Caret", "ほ": "Minus",
-    "ま": "J", "み": "N", "む": "CloseBracket", "め": "Slash", "も": "M",
-    "や": "7", "ゆ": "8", "よ": "9",
-    "ら": "O", "り": "L", "る": "Period", "れ": "Semicolon", "ろ": "Underscore",
-    "わ": "0", "を": "Shift-0", "ん": "Y",
-    "ぁ": "Shift-3", "ぃ": "Shift-E", "ぅ": "Shift-4", "ぇ": "Shift-5", "ぉ": "Shift-6",
-    "ゃ": "Shift-7", "ゅ": "Shift-8", "ょ": "Shift-9", "っ": "Shift-Z",
+# JISかな入力での mac 向け補正（JIS/US 風キー名差分吸収）。
+MAC_KEY_ALIAS_MAP_JIS_KANA = {
+    "ろ": "Underscore",
     "ー": "BackSlash",
-    "゛": "Atmark", "゜": "OpenBracket",
-    "，": "Shift-Comma", "．": "Shift-Period",
-    "、": "Shift-Comma", "。": "Shift-Period", "・": "Shift-Slash",
 }
 
-
-DAKUTEN_BASE_MAP = {
-    "が": "か", "ぎ": "き", "ぐ": "く", "げ": "け", "ご": "こ",
-    "ざ": "さ", "じ": "し", "ず": "す", "ぜ": "せ", "ぞ": "そ",
-    "だ": "た", "ぢ": "ち", "づ": "つ", "で": "て", "ど": "と",
-    "ば": "は", "び": "ひ", "ぶ": "ふ", "べ": "へ", "ぼ": "ほ",
-    "ゔ": "う", "ヴ": "う",
-}
-
-HANDAKUTEN_BASE_MAP = {
-    "ぱ": "は", "ぴ": "ひ", "ぷ": "ふ", "ぺ": "へ", "ぽ": "ほ",
-}
-
-# JISかな送出では扱いづらい文字は、英数キー送出（必要時のみ一時英数化）で処理
-NICOLA_ASCII_FALLBACK_MAP = {
-    "１": "1", "２": "2", "３": "3", "４": "4", "５": "5",
-    "６": "6", "７": "7", "８": "8", "９": "9", "０": "0",
-    "－": "Minus",
-}
-
-TOPROW_SYMBOL_ASCII_KEY_MAP = {
-    "？": "Shift-Slash",
-    "／": "Slash",
-    "～": "Shift-Caret",
-    "「": "Shift-OpenBracket",
-    "」": "Shift-CloseBracket",
-    "〔": "OpenBracket",
-    "〕": "CloseBracket",
-    "（": "Shift-8",
-    "）": "Shift-9",
-    "『": "Shift-Comma",
-    "』": "Shift-Period",
-}
-TOPROW_DIRECT_FULLWIDTH_SYMBOLS = set(TOPROW_SYMBOL_ASCII_KEY_MAP.keys())
-TOPROW_PLAIN_FULLWIDTH_TEXT_MAP = {
-    "1": "１", "2": "２", "3": "３", "4": "４", "5": "５",
-    "6": "６", "7": "７", "8": "８", "9": "９", "0": "０",
-    "Minus": "－",
-}
-TOPROW_SHIFT_FULLWIDTH_TEXT_MAP = {
-    "1": "！", "2": "／", "3": "～", "4": "「", "5": "」",
-    "6": "〔", "7": "〕", "8": "（", "9": "）", "0": "『",
-    "Minus": "』",
-}
-
-# mac で文字直送できない記号・全角数字をキー送信へ変換
+# mac で文字直送できない記号・全角数字をキー送信へ変換。
+# 注: JIS 配列でも mac 側では一部キーが US 配列っぽいキー名/挙動で届くため、
+# 通常の JIS 想定キーコードから意図的に変えている項目がある。
 MAC_CHAR_KEY_MAP = {
     "１": "1", "２": "2", "３": "3", "４": "4", "５": "5",
     "６": "6", "７": "7", "８": "8", "９": "9", "０": "0",
@@ -216,18 +244,18 @@ MAC_CHAR_KEY_MAP = {
     "？": "Shift-Slash",
     "／": "Slash",
     "～": "Shift-Caret",
-    "「": "OpenBracket",
-    "」": "CloseBracket",
-    "〔": "Shift-OpenBracket",
-    "〕": "Shift-CloseBracket",
+    "「": "OpenBracket",          # mac/JIS の US 風キー解釈に合わせる
+    "」": "CloseBracket",         # mac/JIS の US 風キー解釈に合わせる
+    "〔": "Shift-OpenBracket",    # JIS 想定の素直な対応は無いため、｛を出す
+    "〕": "Shift-CloseBracket",   # JIS 想定の素直な対応は無いため、｝を出す
     "（": "Shift-8",
     "）": "Shift-9",
-    "『": "Shift-Comma",
-    "』": "Shift-Period",
+    "『": "Shift-Comma",          # JIS 想定の素直な対応は無いため、＜を出す
+    "』": "Shift-Period",         # JIS 想定の素直な対応は無いため、＞を出す
     "，": "Comma",
     "．": "Period",
-    "゛": "Atmark",
-    "゜": "Shift-Atmark",
+    "゛": "Atmark",               # JIS 記号面ではなく mac 側キー名準拠
+    "゜": "Shift-Atmark",         # JIS 記号面ではなく mac 側キー名準拠
 }
 
 try:
@@ -447,9 +475,9 @@ class NicolaEngine:
 
     def _bind_toprow_fullwidth(self, bind):
         # 上段: 単独打鍵/通常Shift打鍵を全角送出で補強（mac/windows共通）
-        for k, ch in TOPROW_PLAIN_FULLWIDTH_TEXT_MAP.items():
+        for k, ch in KEY_TO_CHAR_TOPROW_PLAIN_FULLWIDTH_MAP.items():
             bind(k, (lambda key=k, c=ch: self._act_toprow_plain(key, c)))
-        for k, ch in TOPROW_SHIFT_FULLWIDTH_TEXT_MAP.items():
+        for k, ch in KEY_TO_CHAR_TOPROW_SHIFT_FULLWIDTH_MAP.items():
             bind(f"Shift-{k}", (lambda key=k, c=ch: self._act_toprow_shift_with_key(key, c)))
         # 確定/キャンセル系キーで composing 状態を即座にクリア
         bind("Return", (lambda: self._act_commit_clear_and_send("Return")))
@@ -496,50 +524,57 @@ class NicolaEngine:
             self._send(ROMAJI_KEYNAME_MAP.get(c, c.upper()))
 
     def _send_jis_kana(self, kana):
+        def _jis_key_expr(ch):
+            if self.os_name != "windows":
+                key_expr = MAC_KEY_ALIAS_MAP_JIS_KANA.get(ch)
+                if key_expr:
+                    return key_expr
+            return JIS_KANA_KEY_MAP.get(ch)
+
         if kana in TOPROW_DIRECT_FULLWIDTH_SYMBOLS:
             if self._send_text(kana, prefer_key_on_mac=False):
                 return True
-            top_sym_fb = TOPROW_SYMBOL_ASCII_KEY_MAP.get(kana)
+            top_sym_fb = CHAR_TO_KEY_TOPROW_SYMBOL_MAP.get(kana)
             if top_sym_fb:
                 logger.info(f"NICOLA: direct text failed for '{kana}', fallback key={top_sym_fb}")
                 self._send_ascii_key_mode(top_sym_fb, fullwidth=True)
                 return True
             return False
 
-        top_sym = TOPROW_SYMBOL_ASCII_KEY_MAP.get(kana)
+        top_sym = CHAR_TO_KEY_TOPROW_SYMBOL_MAP.get(kana)
         if top_sym:
             self._send_ascii_key_mode(top_sym, fullwidth=True)
             return True
 
-        ascii_key = NICOLA_ASCII_FALLBACK_MAP.get(kana)
+        ascii_key = CHAR_TO_KEY_ASCII_FALLBACK_MAP.get(kana)
         if ascii_key:
             self._send_ascii_key_mode(ascii_key)
             return True
 
         if kana == "ー":
-            # JISかな入力で長音「ー」は ¥(Yen) キー
+            # JISかな入力で長音「ー」は ¥(Yen) キー。
             self._send("Yen")
             return True
 
-        key_expr = JIS_KANA_KEY_MAP.get(kana)
+        key_expr = _jis_key_expr(kana)
         if key_expr:
             self._send(key_expr)
             return True
 
         base = DAKUTEN_BASE_MAP.get(kana)
         if base:
-            base_key = JIS_KANA_KEY_MAP.get(base)
+            base_key = _jis_key_expr(base)
             if base_key:
                 self._send(base_key)
-                self._send(JIS_KANA_KEY_MAP["゛"])
+                self._send(_jis_key_expr("゛"))
                 return True
 
         base = HANDAKUTEN_BASE_MAP.get(kana)
         if base:
-            base_key = JIS_KANA_KEY_MAP.get(base)
+            base_key = _jis_key_expr(base)
             if base_key:
                 self._send(base_key)
-                self._send(JIS_KANA_KEY_MAP["゜"])
+                self._send(_jis_key_expr("゜"))
                 return True
 
         return False
@@ -547,7 +582,7 @@ class NicolaEngine:
     def _send_toprow_fullwidth(self, ch):
         if self._send_text(ch, prefer_key_on_mac=False):
             return
-        key_expr = TOPROW_SYMBOL_ASCII_KEY_MAP.get(ch)
+        key_expr = CHAR_TO_KEY_TOPROW_SYMBOL_MAP.get(ch)
         if key_expr:
             self._send_ascii_key_mode(key_expr, fullwidth=True)
 
@@ -846,7 +881,7 @@ class NicolaEngine:
         def _f():
             key = raw_key
             if self.os_name != "windows":
-                key = NICOLA_MAIN_KEY_ALIASES.get(key, key)
+                key = MAC_KEY_ALIAS_MAP_MAIN.get(key, key)
             self._apply_left_oneshot_if_due()
             self._apply_pending_plain()
             now = time.time()
@@ -879,7 +914,7 @@ class NicolaEngine:
         def _f():
             key = raw_key
             if self.os_name != "windows":
-                key = NICOLA_MAIN_KEY_ALIASES.get(key, key)
+                key = MAC_KEY_ALIAS_MAP_MAIN.get(key, key)
             self._apply_left_oneshot_if_due()
             if self.pending_key == key:
                 # 親指未介入なら平面確定
